@@ -1,0 +1,362 @@
+[
+  {
+    "id": "inst1_start",
+    "instanceId": 1,
+    "type": "START",
+    "driver": "Cristiano Ronaldo",
+    "text": "Đèn xanh bật rồi anh em ơi! Hôm qua Ronaldo đi mua bánh mì mà quên mang ví bị chủ quán bắt rửa bát, hôm nay phải đạp lút ga kiếm tiền chuộc thân!",
+    "path": "/audio/commentary/inst1_start.mp3",
+    "duration": 10.37
+  },
+  {
+    "id": "inst1_nitro",
+    "instanceId": 1,
+    "type": "NITRO",
+    "driver": "Cristiano Ronaldo",
+    "text": "Ronaldo bấm nút Nitro Siuuu! Khói xịt mù mịt đằng sau, tốc độ này thì camera bắn tốc độ cũng phải cháy bugi!",
+    "path": "/audio/commentary/inst1_nitro.mp3",
+    "duration": 9.22
+  },
+  {
+    "id": "inst1_overtake",
+    "instanceId": 1,
+    "type": "OVERTAKE",
+    "driver": "Cristiano Ronaldo",
+    "text": "Pha vượt mặt quá khét của anh Bảy! Anh vừa ôm cua vừa soi gương vuốt lại tóc tai bóng lộn không lệch sợi nào!",
+    "path": "/audio/commentary/inst1_overtake.mp3",
+    "duration": 7.73
+  },
+  {
+    "id": "inst1_finish",
+    "instanceId": 1,
+    "type": "FINISH",
+    "driver": "Cristiano Ronaldo",
+    "text": "Siuuu! Về nhất rồi bà con ơi! Đủ tiền mua mười ổ bánh mì pate trứng rồi, không phải rửa bát nữa nhé!",
+    "path": "/audio/commentary/inst1_finish.mp3",
+    "duration": 8.02
+  },
+  {
+    "id": "inst2_start",
+    "instanceId": 2,
+    "type": "START",
+    "driver": "Lionel Messi",
+    "text": "Chào mừng anh em đến luồng hai! Messi hôm nay mang dép tổ ong đạp ga, anh đang vội về sớm vì vợ dặn trước sáu giờ phải phơi xong quần áo!",
+    "path": "/audio/commentary/inst2_start.mp3",
+    "duration": 9.74
+  },
+  {
+    "id": "inst2_nitro",
+    "instanceId": 2,
+    "type": "NITRO",
+    "driver": "Lionel Messi",
+    "text": "Messi vít ga như gắn tên lửa đẩy vệ tinh! Xe nhỏ mà chạy như ăn cướp, cua một phát trôi luôn ổ gà ven đường!",
+    "path": "/audio/commentary/inst2_nitro.mp3",
+    "duration": 8.36
+  },
+  {
+    "id": "inst2_overtake",
+    "instanceId": 2,
+    "type": "OVERTAKE",
+    "driver": "Lionel Messi",
+    "text": "Nghe đồn hôm qua Messi thách Ronaldo thi chạy bộ thua một chầu trà sữa, hôm nay lên xe đua tính sổ luôn cho nóng!",
+    "path": "/audio/commentary/inst2_overtake.mp3",
+    "duration": 7.86
+  },
+  {
+    "id": "inst2_finish",
+    "instanceId": 2,
+    "type": "FINISH",
+    "driver": "Lionel Messi",
+    "text": "Đúng là GOAT! Messi cán đích cờ ca rô rực rỡ, kịp giờ về nấu cơm cho vợ rồi anh em ơi!",
+    "path": "/audio/commentary/inst2_finish.mp3",
+    "duration": 7.08
+  },
+  {
+    "id": "inst3_start",
+    "instanceId": 3,
+    "type": "START",
+    "driver": "Neymar Jr",
+    "text": "Luồng ba xuất phát! Neymar cam kết hôm nay không ngã lăn ra đường ăn vạ nữa, quyết tâm đua xe nghiêm túc kiếm tiền nạp game!",
+    "path": "/audio/commentary/inst3_start.mp3",
+    "duration": 8.25
+  },
+  {
+    "id": "inst3_drift",
+    "instanceId": 3,
+    "type": "DRIFT",
+    "driver": "Neymar Jr",
+    "text": "Neymar vừa ôm cua vừa biểu diễn múa samba trên vô lăng! Suýt nữa thì xoay mười tám vòng như trên sân cỏ rồi anh em!",
+    "path": "/audio/commentary/inst3_drift.mp3",
+    "duration": 8.8
+  },
+  {
+    "id": "inst3_overtake",
+    "instanceId": 3,
+    "type": "OVERTAKE",
+    "driver": "Neymar Jr",
+    "text": "Hôm qua Neymar đi gội đầu dưỡng sinh ngủ quên mất chuyến bay, hôm nay lấy xe đua phóng bạt mạng sang Paris cho kịp giờ hẹn!",
+    "path": "/audio/commentary/inst3_overtake.mp3",
+    "duration": 7.89
+  },
+  {
+    "id": "inst3_finish",
+    "instanceId": 3,
+    "type": "FINISH",
+    "driver": "Neymar Jr",
+    "text": "Neymar về đích rồi! Tuyệt đối không ăn vạ phát nào, trao ngay cúp vô địch và một gói bim bim cho anh ấy!",
+    "path": "/audio/commentary/inst3_finish.mp3",
+    "duration": 7.44
+  },
+  {
+    "id": "inst4_start",
+    "instanceId": 4,
+    "type": "START",
+    "driver": "Kylian Mbappe",
+    "text": "Luồng bốn! Ninja Rùa Mbappe đạp ga với tốc độ bàn thờ! Mẹ vừa gọi điện bảo về ăn cơm cá kho nên anh chạy bất chấp!",
+    "path": "/audio/commentary/inst4_start.mp3",
+    "duration": 8.18
+  },
+  {
+    "id": "inst4_nitro",
+    "instanceId": 4,
+    "type": "NITRO",
+    "driver": "Kylian Mbappe",
+    "text": "Tốc độ sáu trăm ki lô mét một giờ! Chạy nhanh hơn cả tốc độ người yêu cũ trở mặt, đố ai đuổi kịp Ninja Rùa!",
+    "path": "/audio/commentary/inst4_nitro.mp3",
+    "duration": 7.76
+  },
+  {
+    "id": "inst4_overtake",
+    "instanceId": 4,
+    "type": "OVERTAKE",
+    "driver": "Kylian Mbappe",
+    "text": "Mbappe lách nhẹ qua ba xe cùng lúc! Cảnh sát giao thông bên đường chỉ biết đứng nhìn và vẫy tay chào tạm biệt!",
+    "path": "/audio/commentary/inst4_overtake.mp3",
+    "duration": 6.92
+  },
+  {
+    "id": "inst4_finish",
+    "instanceId": 4,
+    "type": "FINISH",
+    "driver": "Kylian Mbappe",
+    "text": "Về đích ngoạn mục! Kịp giờ ăn cơm mẹ nấu rồi, Mbappe đỉnh nóc kịch trần bay phấp phới!",
+    "path": "/audio/commentary/inst4_finish.mp3",
+    "duration": 6.4
+  },
+  {
+    "id": "inst5_start",
+    "instanceId": 5,
+    "type": "START",
+    "driver": "David Beckham",
+    "text": "Luồng năm quý ông Beckham lên sàn! Trước khi đề nổ anh vừa xịt nửa lọ keo vuốt tóc, đẹp trai số một trường đua!",
+    "path": "/audio/commentary/inst5_start.mp3",
+    "duration": 8.7
+  },
+  {
+    "id": "inst5_nitro",
+    "instanceId": 5,
+    "type": "NITRO",
+    "driver": "David Beckham",
+    "text": "Hôm qua Beckham bị vợ bắt đi siêu thị xách mười túi đồ mỏi hết cả tay, hôm nay ra trường đua xả giận phóng bạt mạng!",
+    "path": "/audio/commentary/inst5_nitro.mp3",
+    "duration": 8.07
+  },
+  {
+    "id": "inst5_drift",
+    "instanceId": 5,
+    "type": "DRIFT",
+    "driver": "David Beckham",
+    "text": "Gió thổi bay kính râm nhưng nếp tóc bổ luống của Beckham vẫn bất tử! Cú ôm cua cong vút như đường chuyền bóng vàng!",
+    "path": "/audio/commentary/inst5_drift.mp3",
+    "duration": 8.7
+  },
+  {
+    "id": "inst5_finish",
+    "instanceId": 5,
+    "type": "FINISH",
+    "driver": "David Beckham",
+    "text": "Thắng rồi! Vừa đẹp trai vừa lái xe lụa, camera xin hãy quay cận cảnh nụ cười làm tan chảy trái tim người hâm mộ!",
+    "path": "/audio/commentary/inst5_finish.mp3",
+    "duration": 8.65
+  },
+  {
+    "id": "inst6_start",
+    "instanceId": 6,
+    "type": "START",
+    "driver": "Elon Musk",
+    "text": "Luồng sáu đại gia Elon Musk! Nghe bảo Twitter hôm nay lại sập máy chủ nên Elon Musk đích thân lái xe tên lửa đi sửa mạng!",
+    "path": "/audio/commentary/inst6_start.mp3",
+    "duration": 8.72
+  },
+  {
+    "id": "inst6_nitro",
+    "instanceId": 6,
+    "type": "NITRO",
+    "driver": "Elon Musk",
+    "text": "Elon Musk kích hoạt chế độ lái tự động nhưng xe chạy bốc khói, màn hình hiện cảnh báo nhiệt độ một ngàn độ C luôn!",
+    "path": "/audio/commentary/inst6_nitro.mp3",
+    "duration": 7.58
+  },
+  {
+    "id": "inst6_overtake",
+    "instanceId": 6,
+    "type": "OVERTAKE",
+    "driver": "Elon Musk",
+    "text": "Vượt mặt không cần xi nhan! Đúng là phong cách tỷ phú công nghệ, chạy trước cho đỡ phải hít khói của người khác!",
+    "path": "/audio/commentary/inst6_overtake.mp3",
+    "duration": 7.55
+  },
+  {
+    "id": "inst6_finish",
+    "instanceId": 6,
+    "type": "FINISH",
+    "driver": "Elon Musk",
+    "text": "Về nhất rồi! Elon Musk tuyên bố tặng mỗi khán giả đang xem video này một chiếc xe điện bay thẳng lên sao Hỏa!",
+    "path": "/audio/commentary/inst6_finish.mp3",
+    "duration": 7.55
+  },
+  {
+    "id": "inst7_start",
+    "instanceId": 7,
+    "type": "START",
+    "driver": "Max Verstappen",
+    "text": "Luồng bảy quái kiệt Max Verstappen! Anh vừa lái xe vừa cắm ống hút uống trà sữa trân châu đường đen cực chill!",
+    "path": "/audio/commentary/inst7_start.mp3",
+    "duration": 7.73
+  },
+  {
+    "id": "inst7_nitro",
+    "instanceId": 7,
+    "type": "NITRO",
+    "driver": "Max Verstappen",
+    "text": "Hôm qua Max chơi game đua xe cả đêm bị mẹ rút dây mạng, sáng nay cáu tiết ra trường đua thật đạp lút sàn nhà!",
+    "path": "/audio/commentary/inst7_nitro.mp3",
+    "duration": 7.21
+  },
+  {
+    "id": "inst7_overtake",
+    "instanceId": 7,
+    "type": "OVERTAKE",
+    "driver": "Max Verstappen",
+    "text": "Bứt tốc kinh hoàng! Đối thủ phía sau vừa chớp mắt một cái là Max đã mất hút sau rặng tre làng rồi!",
+    "path": "/audio/commentary/inst7_overtake.mp3",
+    "duration": 6.77
+  },
+  {
+    "id": "inst7_finish",
+    "instanceId": 7,
+    "type": "FINISH",
+    "driver": "Max Verstappen",
+    "text": "Lại là Max Verstappen chiến thắng! Đua dễ quá anh bảo lần sau cho anh vừa bịt mắt vừa lái xe cho có thử thách!",
+    "path": "/audio/commentary/inst7_finish.mp3",
+    "duration": 7.44
+  },
+  {
+    "id": "inst8_start",
+    "instanceId": 8,
+    "type": "START",
+    "driver": "Lewis Hamilton",
+    "text": "Luồng tám Sir Lewis Hamilton xuất phát! Sáng nay Hamilton mặc bộ đồ dạ hội bảy sắc cầu vồng đi đua xe thời trang nhất giải!",
+    "path": "/audio/commentary/inst8_start.mp3",
+    "duration": 9.27
+  },
+  {
+    "id": "inst8_nitro",
+    "instanceId": 8,
+    "type": "NITRO",
+    "driver": "Lewis Hamilton",
+    "text": "Hamilton vừa bật bộ đàm hỏi ban kỹ thuật xem ai ăn vụng bát mì tôm hai quả trứng của anh trong phòng thay đồ!",
+    "path": "/audio/commentary/inst8_nitro.mp3",
+    "duration": 7.5
+  },
+  {
+    "id": "inst8_overtake",
+    "instanceId": 8,
+    "type": "OVERTAKE",
+    "driver": "Lewis Hamilton",
+    "text": "Pha lạng lách kinh điển của nhà vô địch bảy lần thế giới! Vừa cua vừa né ổ gà điêu luyện như đường làng mùa mưa!",
+    "path": "/audio/commentary/inst8_overtake.mp3",
+    "duration": 8.33
+  },
+  {
+    "id": "inst8_finish",
+    "instanceId": 8,
+    "type": "FINISH",
+    "driver": "Lewis Hamilton",
+    "text": "Cờ ca rô vẫy chào Hamilton! Đẳng cấp tay lái vàng trong làng quái xế, mang cúp về cất tủ kính thôi!",
+    "path": "/audio/commentary/inst8_finish.mp3",
+    "duration": 8.36
+  },
+  {
+    "id": "inst9_start",
+    "instanceId": 9,
+    "type": "START",
+    "driver": "Erling Haaland",
+    "text": "Luồng chín Ma Búp Bê Haaland! Sáng nay ăn liền năm tô phở bò tái gầu nhiều hành, giờ thừa năng lượng đạp cong cả bàn đạp ga!",
+    "path": "/audio/commentary/inst9_start.mp3",
+    "duration": 8.91
+  },
+  {
+    "id": "inst9_nitro",
+    "instanceId": 9,
+    "type": "NITRO",
+    "driver": "Erling Haaland",
+    "text": "Haaland to như hộ pháp ngồi chật cả khoang lái, xe đua gầm rú như máy cày chạy trên ruộng bậc thang!",
+    "path": "/audio/commentary/inst9_nitro.mp3",
+    "duration": 6.9
+  },
+  {
+    "id": "inst9_overtake",
+    "instanceId": 9,
+    "type": "OVERTAKE",
+    "driver": "Erling Haaland",
+    "text": "Cú húc Nitro của Haaland làm cả trường đua chao đảo! Xe bay như quả đại bác bắn thẳng về phía trước không ai dám cản!",
+    "path": "/audio/commentary/inst9_overtake.mp3",
+    "duration": 8.25
+  },
+  {
+    "id": "inst9_finish",
+    "instanceId": 9,
+    "type": "FINISH",
+    "driver": "Erling Haaland",
+    "text": "Haaland đè bẹp tất cả đối thủ! Về đích xong anh bảo phải nhảy xuống ăn thêm ba cái bánh mì nữa mới đỡ đói!",
+    "path": "/audio/commentary/inst9_finish.mp3",
+    "duration": 7.52
+  },
+  {
+    "id": "inst10_start",
+    "instanceId": 10,
+    "type": "START",
+    "driver": "Trùm Cuối Vô Danh",
+    "text": "Luồng mười trùm cuối xuất hiện! Hôm nay đi dép tông, xe không gương, đội mũ bảo hiểm con vịt vàng vào cua như thần!",
+    "path": "/audio/commentary/inst10_start.mp3",
+    "duration": 7.92
+  },
+  {
+    "id": "inst10_nitro",
+    "instanceId": 10,
+    "type": "NITRO",
+    "driver": "Trùm Cuối Vô Danh",
+    "text": "Nghe nói anh này hôm qua bị mẹ tịch thu xe máy, hôm nay mượn tạm siêu xe của hàng xóm ra đua ké kiếm tiền ăn sáng!",
+    "path": "/audio/commentary/inst10_nitro.mp3",
+    "duration": 8.05
+  },
+  {
+    "id": "inst10_drift",
+    "instanceId": 10,
+    "type": "DRIFT",
+    "driver": "Trùm Cuối Vô Danh",
+    "text": "Đánh lái hình chữ S, lướt trên mặt đường nhựa bốc khói khét lẹt, các tay đua chuyên nghiệp nhìn thấy cũng phải vái lạy!",
+    "path": "/audio/commentary/inst10_drift.mp3",
+    "duration": 7.52
+  },
+  {
+    "id": "inst10_finish",
+    "instanceId": 10,
+    "type": "FINISH",
+    "driver": "Trùm Cuối Vô Danh",
+    "text": "Trùm cuối giật cúp vô địch luồng mười! Quá đẳng cấp, đúng là cao thủ ẩn danh của xóm chúng ta!",
+    "path": "/audio/commentary/inst10_finish.mp3",
+    "duration": 6.74
+  }
+]

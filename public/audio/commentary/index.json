@@ -1,0 +1,135 @@
+[
+  {
+    "id": "start_1",
+    "type": "START",
+    "text": "Lights out and away we go! Magnificent launch off the line!",
+    "path": "/audio/commentary/start_1.mp3",
+    "duration": 5.250612
+  },
+  {
+    "id": "start_2",
+    "type": "START",
+    "text": "Green flag! Full throttle down the main straight into turn one!",
+    "path": "/audio/commentary/start_2.mp3",
+    "duration": 5.01551
+  },
+  {
+    "id": "start_3",
+    "type": "START",
+    "text": "And they're off! An explosive start for this high-speed Grand Prix!",
+    "path": "/audio/commentary/start_3.mp3",
+    "duration": 5.041633
+  },
+  {
+    "id": "overtake_1",
+    "type": "OVERTAKE",
+    "text": "Sensational overtake on the inside! What a brilliant move!",
+    "path": "/audio/commentary/overtake_1.mp3",
+    "duration": 5.12
+  },
+  {
+    "id": "overtake_2",
+    "type": "OVERTAKE",
+    "text": "Wheel to wheel action! He dives down the inside and takes the lead!",
+    "path": "/audio/commentary/overtake_2.mp3",
+    "duration": 5.485714
+  },
+  {
+    "id": "overtake_3",
+    "type": "OVERTAKE",
+    "text": "Stunning pass! Late on the brakes and executes to perfection!",
+    "path": "/audio/commentary/overtake_3.mp3",
+    "duration": 5.32898
+  },
+  {
+    "id": "overtake_4",
+    "type": "OVERTAKE",
+    "text": "Incredible racing! Slicing through traffic with supreme confidence!",
+    "path": "/audio/commentary/overtake_4.mp3",
+    "duration": 5.616327
+  },
+  {
+    "id": "nitro_1",
+    "type": "NITRO",
+    "text": "Nitrous engaged! Rocketing down the straight at blinding speed!",
+    "path": "/audio/commentary/nitro_1.mp3",
+    "duration": 5.276735
+  },
+  {
+    "id": "nitro_2",
+    "type": "NITRO",
+    "text": "Maximum boost activated! Unleashing pure hypercar velocity!",
+    "path": "/audio/commentary/nitro_2.mp3",
+    "duration": 5.642449
+  },
+  {
+    "id": "nitro_3",
+    "type": "NITRO",
+    "text": "Look at that acceleration, blasting past four hundred and fifty kilometers per hour!",
+    "path": "/audio/commentary/nitro_3.mp3",
+    "duration": 6.269388
+  },
+  {
+    "id": "drift_1",
+    "type": "DRIFT",
+    "text": "Absolute masterclass on the drift, smoking tires sideways through the bend!",
+    "path": "/audio/commentary/drift_1.mp3",
+    "duration": 5.929796
+  },
+  {
+    "id": "drift_2",
+    "type": "DRIFT",
+    "text": "Spectacular car control! Carrying incredible speed around the hairpin!",
+    "path": "/audio/commentary/drift_2.mp3",
+    "duration": 5.955918
+  },
+  {
+    "id": "drift_3",
+    "type": "DRIFT",
+    "text": "Hanging the rear out on the limit of adhesion, pure precision driving!",
+    "path": "/audio/commentary/drift_3.mp3",
+    "duration": 5.01551
+  },
+  {
+    "id": "battle_1",
+    "type": "BATTLE",
+    "text": "Fierce battle for the top spot! Neither driver giving an inch!",
+    "path": "/audio/commentary/battle_1.mp3",
+    "duration": 4.884898
+  },
+  {
+    "id": "battle_2",
+    "type": "BATTLE",
+    "text": "Setting purple sectors! The race leader is pulling away in style!",
+    "path": "/audio/commentary/battle_2.mp3",
+    "duration": 5.32898
+  },
+  {
+    "id": "battle_3",
+    "type": "BATTLE",
+    "text": "Gap closing rapidly, hunting down the leader with relentless pace!",
+    "path": "/audio/commentary/battle_3.mp3",
+    "duration": 5.146122
+  },
+  {
+    "id": "finish_1",
+    "type": "FINISH",
+    "text": "Chequered flag waves! Victory at the line, what an unforgettable race!",
+    "path": "/audio/commentary/finish_1.mp3",
+    "duration": 5.929796
+  },
+  {
+    "id": "finish_2",
+    "type": "FINISH",
+    "text": "Crossing the finish line to take the win! Absolute champion of the Grand Prix!",
+    "path": "/audio/commentary/finish_2.mp3",
+    "duration": 5.668571
+  },
+  {
+    "id": "finish_3",
+    "type": "FINISH",
+    "text": "What a dominant drive! Taking the chequered flag in sensational fashion!",
+    "path": "/audio/commentary/finish_3.mp3",
+    "duration": 5.511837
+  }
+]
