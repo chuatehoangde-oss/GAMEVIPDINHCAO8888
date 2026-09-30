@@ -28,8 +28,13 @@ export class MultiInstanceEngine {
   private lastFpsCalcTime: number = performance.now();
   public currentFPS: number = 60;
   private resizeObserver: ResizeObserver | null = null;
+  public focusedInstanceId: number | null = null;
 
   constructor() {}
+
+  setFocusedInstance(id: number | null) {
+    this.focusedInstanceId = id;
+  }
 
   init(canvas: HTMLCanvasElement, config: SystemConfig) {
     this.canvas = canvas;
@@ -214,12 +219,38 @@ export class MultiInstanceEngine {
       if (!this.isPaused) {
         // Update all active instances
         let primaryCar: any = null;
+        let activeAudioOvertakeCarId: string | null = null;
+        let activeAudioCollisionCarId: string | null = null;
+        let activeAudioCollisionPos: THREE.Vector3 | null = null;
+        let activeAudioCollisionIntensity: number = 0.85;
+
         for (const instance of this.instances.values()) {
-          const { chunkCompleted, activeOvertakeCarId, collisionCarId } = instance.update(
+          const { chunkCompleted, activeOvertakeCarId, collisionCarId, collisionCarPos, collisionIntensity } = instance.update(
             delta,
             config.aiAggressionGlobal,
             config.cinematicAutoDirector
           );
+
+          const isAudioActive = (!this.focusedInstanceId && instance.id === 1) || (this.focusedInstanceId === instance.id);
+          if (isAudioActive) {
+            activeAudioOvertakeCarId = activeOvertakeCarId;
+            activeAudioCollisionCarId = collisionCarId;
+            activeAudioCollisionPos = collisionCarPos || null;
+            activeAudioCollisionIntensity = collisionIntensity || 0.85;
+
+            if (collisionCarId) {
+              let colPan = 0;
+              if (collisionCarPos && instance.cameraDirector) {
+                const cam = instance.cameraDirector.camera;
+                const rel = collisionCarPos.clone().sub(cam.position);
+                const right = new THREE.Vector3();
+                cam.getWorldDirection(right);
+                right.cross(new THREE.Vector3(0, 1, 0)).normalize();
+                colPan = Math.max(-0.9, Math.min(0.9, rel.dot(right) / Math.max(1, rel.length())));
+              }
+              audioEngine.triggerCollision(collisionIntensity || 0.85, colPan);
+            }
+          }
 
           if (activeOvertakeCarId) {
             const car = instance.cars.find(c => c.state.id === activeOvertakeCarId);
@@ -278,17 +309,20 @@ export class MultiInstanceEngine {
           }
         }
 
-        // Đạo diễn âm thanh không gian 3D theo vị trí Camera và toàn bộ đoàn 15 xe đua
-        const activeInstance = this.instances.get(1) || this.instances.values().next().value;
+        // Đạo diễn âm thanh không gian 3D theo vị trí Camera và toàn bộ đoàn xe đua của chính luồng đang theo dõi
+        const activeInstance = (this.focusedInstanceId ? this.instances.get(this.focusedInstanceId) : null)
+          || this.instances.get(1)
+          || this.instances.values().next().value;
         if (activeInstance && activeInstance.cameraDirector && activeInstance.cars.length > 0) {
           const cam = activeInstance.cameraDirector.camera;
           cam.getWorldDirection(this._reusableCamDir);
+          const activeLeaderCar = activeInstance.cars.find(c => c.state.rank === 1) || activeInstance.cars[0];
 
           const spatialCamera: SpatialCameraListener = {
             position: cam.position,
             forward: this._reusableCamDir,
             mode: activeInstance.cameraDirector.currentMode,
-            speedKmh: primaryCar?.state.speed || 380
+            speedKmh: activeLeaderCar?.state.speed || 380
           };
 
           const spatialCars: SpatialAudioSource[] = activeInstance.cars.map(c => {
@@ -303,6 +337,8 @@ export class MultiInstanceEngine {
               speedKmh: spd,
               rpm: rpm,
               throttle: c.state.isHyperBoosting ? 1.0 : (c.state.throttle || 0.88),
+              gear: c.state.gear,
+              hasShiftPop: Boolean(c.state.hasShiftPop),
               isDrifting: Boolean(c.state.isDrifting),
               isNitro: Boolean(c.state.isHyperBoosting),
               isBraking: Boolean(c.state.isBraking)
@@ -313,7 +349,11 @@ export class MultiInstanceEngine {
             spatialCamera,
             spatialCars,
             activeInstance.seedData?.biome,
-            activeInstance.seedData?.weather
+            activeInstance.seedData?.weather,
+            activeAudioOvertakeCarId,
+            activeAudioCollisionCarId,
+            activeAudioCollisionPos,
+            activeAudioCollisionIntensity
           );
         }
 

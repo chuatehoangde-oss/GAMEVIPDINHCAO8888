@@ -206,6 +206,13 @@ export default function App() {
     engineRef.current.updateInstanceCount(config.instanceCount, config.durationSeconds);
   }, [config.instanceCount, config.durationSeconds]);
 
+  // Đồng bộ âm thanh trực tiếp với luồng đang được người dùng bấm xem chi tiết
+  useEffect(() => {
+    if (engineRef.current) {
+      engineRef.current.setFocusedInstance(inspectInstanceId);
+    }
+  }, [inspectInstanceId]);
+
   // Bộ đếm thời gian hoạt động Uptime
   useEffect(() => {
     const timer = setInterval(() => {

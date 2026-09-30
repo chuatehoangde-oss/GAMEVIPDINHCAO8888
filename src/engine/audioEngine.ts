@@ -30,6 +30,19 @@ interface SpatialEngineVoice {
   lastShiftTime: number;
 }
 
+export interface InstanceTelemetrySnapshot {
+  timeSec: number;
+  cameraMode: CameraMode;
+  cameraPos: THREE.Vector3;
+  cameraDir: THREE.Vector3;
+  cameraSpeed: number;
+  cars: SpatialAudioSource[];
+  activeOvertakeCarId?: string | null;
+  collisionCarId?: string | null;
+  collisionPos?: THREE.Vector3 | null;
+  collisionIntensity?: number;
+}
+
 /**
  * RACING AUDIO DIRECTOR 3.0
  * Hệ thống âm thanh đua xe chuẩn truyền hình thế hệ mới:
@@ -128,6 +141,7 @@ export class AudioEngine {
 
   // Trạng thái Ducking khi BLV nói
   private isDuckingActive: boolean = false;
+  private lastCollisionTime: number = 0;
 
   constructor() {
     this.setupAutoUnlockListener();
@@ -277,21 +291,24 @@ export class AudioEngine {
       this.bovNoiseBuffer = this.createNoiseBuffer(0.45);
 
       // =========================================================================
-      // 3. KHỞI TẠO 5 VOICES ĐỘNG CƠ CẬN CẢNH KHÔNG GIAN
+      // 3. KHỞI TẠO 35 VOICES ĐỘNG CƠ CẬN CẢNH KHÔNG GIAN CHO TOÀN BỘ ĐOÀN ĐUA (LÊN TỚI 35 XE)
+      // Mỗi chiếc xe đều sở hữu bộ 3 dao động sóng âm riêng biệt (Sawtooth + Sub Triangle + High Harmonics Pulse)
+      // cùng bộ lọc bướm ga và hiệu ứng Doppler 3D Panning độc lập
       // =========================================================================
       this.carVoices = [];
-      for (let i = 0; i < 5; i++) {
+      const MAX_LIVE_VOICES = 35;
+      for (let i = 0; i < MAX_LIVE_VOICES; i++) {
         const oscSaw = this.ctx.createOscillator();
         oscSaw.type = 'sawtooth';
-        oscSaw.frequency.setValueAtTime(75 + i * 10, now);
+        oscSaw.frequency.setValueAtTime(75 + (i * 13) % 180, now);
 
         const oscSub = this.ctx.createOscillator();
         oscSub.type = 'triangle';
-        oscSub.frequency.setValueAtTime((75 + i * 10) * 0.5, now);
+        oscSub.frequency.setValueAtTime((75 + (i * 13) % 180) * 0.5, now);
 
         const oscPulse = this.ctx.createOscillator();
         oscPulse.type = 'square';
-        oscPulse.frequency.setValueAtTime((75 + i * 10) * 2.0, now);
+        oscPulse.frequency.setValueAtTime((75 + (i * 13) % 180) * 2.0, now);
 
         const oscTurbo = this.ctx.createOscillator();
         oscTurbo.type = 'sine';
@@ -318,7 +335,7 @@ export class AudioEngine {
         panner.pan.setValueAtTime(0, now);
 
         const gain = this.ctx.createGain();
-        gain.gain.setValueAtTime(i === 0 ? 0.38 : 0.0, now);
+        gain.gain.setValueAtTime(0.0, now);
 
         oscSaw.connect(filter);
         oscSub.connect(filter);
@@ -716,69 +733,103 @@ export class AudioEngine {
   }
 
   /**
-   * Phát hiệu ứng tiếng xé gió vụt qua camera ven đường (High-Speed Flyby Whoosh)
+   * Phát hiệu ứng tiếng xé gió / bứt tốc vượt mặt vụt qua ("vèo vèo") (High-Speed Overtake / Flyby Whoosh)
+   * Âm xé gió khí động học êm dịu, mượt mà chuẩn điện ảnh, triệt tiêu hoàn toàn tiếng bụp chẹt
    */
-  triggerFlyby(speedKmh: number = 480, panStart: number = -0.9, panEnd: number = 0.9) {
+  triggerFlyby(speedKmh: number = 480, panStart: number = -0.85, panEnd: number = 0.95) {
     if (!this.ctx || this.isMuted || !this.flybyNoiseBuffer || !this.windBus) return;
     try {
       const now = this.ctx.currentTime;
+      // 1. Tầng xé gió khí động học êm dịu (Soft aerodynamic wind hiss: 3200Hz -> 420Hz)
       const flybySource = this.ctx.createBufferSource();
       flybySource.buffer = this.flybyNoiseBuffer;
 
       const flybyFilter = this.ctx.createBiquadFilter();
       flybyFilter.type = 'bandpass';
-      flybyFilter.frequency.setValueAtTime(3800, now);
-      flybyFilter.frequency.exponentialRampToValueAtTime(420, now + 0.36);
-      flybyFilter.Q.setValueAtTime(4.6, now);
+      flybyFilter.frequency.setValueAtTime(3200, now);
+      flybyFilter.frequency.exponentialRampToValueAtTime(420, now + 0.42);
+      flybyFilter.Q.setValueAtTime(1.8, now);
+
+      // 2. Tầng áp suất xé gió trầm ấm (Aerodynamic pressure body: 680Hz -> 180Hz)
+      const bodySource = this.ctx.createBufferSource();
+      bodySource.buffer = this.flybyNoiseBuffer;
+
+      const bodyFilter = this.ctx.createBiquadFilter();
+      bodyFilter.type = 'lowpass';
+      bodyFilter.frequency.setValueAtTime(680, now);
+      bodyFilter.frequency.exponentialRampToValueAtTime(180, now + 0.45);
+      bodyFilter.Q.setValueAtTime(1.2, now);
 
       const flybyPanner = this.ctx.createStereoPanner();
       flybyPanner.pan.setValueAtTime(panStart, now);
-      flybyPanner.pan.linearRampToValueAtTime(panEnd, now + 0.36);
+      flybyPanner.pan.linearRampToValueAtTime(panEnd, now + 0.42);
 
       const flybyGain = this.ctx.createGain();
-      const intensity = Math.min(0.55, 0.22 + (speedKmh / 550) * 0.30);
+      const intensity = Math.min(0.35, 0.18 + (speedKmh / 650) * 0.17);
       flybyGain.gain.setValueAtTime(0.001, now);
       flybyGain.gain.linearRampToValueAtTime(intensity, now + 0.10);
-      flybyGain.gain.exponentialRampToValueAtTime(0.001, now + 0.40);
+      flybyGain.gain.exponentialRampToValueAtTime(0.001, now + 0.48);
 
       flybySource.connect(flybyFilter);
+      bodySource.connect(bodyFilter);
       flybyFilter.connect(flybyPanner);
+      bodyFilter.connect(flybyPanner);
       flybyPanner.connect(flybyGain);
       flybyGain.connect(this.windBus);
 
       flybySource.start(now);
-      flybySource.stop(now + 0.42);
+      flybySource.stop(now + 0.50);
+      bodySource.start(now);
+      bodySource.stop(now + 0.50);
     } catch {
       // Ignore
     }
   }
 
   /**
-   * Phát hiệu ứng tiếng va chạm / quẹt sườn xe (Collision Bus)
+   * Đã tắt hiệu ứng giả lập nổ pô tổng hợp để triệt tiêu vĩnh viễn tiếng lạ bụp bụp chẹt chẹt
+   */
+  triggerShiftPop(_pan: number = 0.0, _intensity: number = 0.65) {
+    // No-op: Giữ tiếng máy chuyển số thuần khiết, mượt mà tự nhiên không bị bụp chẹt
+  }
+
+  /**
+   * Phát hiệu ứng tiếng va chạm / quẹt sườn xe trầm ấm (Sub-bass impact thud)
+   * Giới hạn tần suất tối đa 1 lần mỗi 2 giây, loại bỏ hoàn toàn tiếng rác kim loại chẹt chẹt
    */
   triggerCollision(intensity: number = 0.8, pan: number = 0.0) {
     if (!this.ctx || this.isMuted || !this.collisionBus) return;
+    const now = this.ctx.currentTime;
+    if (now - this.lastCollisionTime < 2.0) return; // Cooldown 2.0s chống lặp tiếng
+    this.lastCollisionTime = now;
+
     try {
-      const now = this.ctx.currentTime;
+      // Cú va đập trầm lực lưỡng êm ái (Triangle 95Hz -> 32Hz, không dùng sawtooth hay noise rác)
       const osc = this.ctx.createOscillator();
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(140, now);
-      osc.frequency.exponentialRampToValueAtTime(35, now + 0.18);
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(95, now);
+      osc.frequency.exponentialRampToValueAtTime(32, now + 0.18);
+
+      const oscFilter = this.ctx.createBiquadFilter();
+      oscFilter.type = 'lowpass';
+      oscFilter.frequency.setValueAtTime(220, now);
+
+      const oscGain = this.ctx.createGain();
+      const vol = Math.min(0.40, intensity * 0.35);
+      oscGain.gain.setValueAtTime(0.001, now);
+      oscGain.gain.linearRampToValueAtTime(vol, now + 0.02);
+      oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
 
       const panner = this.ctx.createStereoPanner();
-      panner.pan.setValueAtTime(pan, now);
+      panner.pan.setValueAtTime(Math.max(-0.85, Math.min(0.85, pan)), now);
 
-      const gain = this.ctx.createGain();
-      const vol = Math.min(0.85, intensity * 0.75);
-      gain.gain.setValueAtTime(vol, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
-
-      osc.connect(panner);
-      panner.connect(gain);
-      gain.connect(this.collisionBus);
+      osc.connect(oscFilter);
+      oscFilter.connect(oscGain);
+      oscGain.connect(panner);
+      panner.connect(this.collisionBus);
 
       osc.start(now);
-      osc.stop(now + 0.26);
+      osc.stop(now + 0.24);
     } catch {
       // Ignore
     }
@@ -791,7 +842,11 @@ export class AudioEngine {
     cameraListener: SpatialCameraListener,
     cars: SpatialAudioSource[],
     biome?: TrackBiome | string,
-    weather?: WeatherType | string
+    weather?: WeatherType | string,
+    activeOvertakeCarId?: string | null,
+    collisionCarId?: string | null,
+    collisionPos?: THREE.Vector3 | null,
+    collisionIntensity?: number
   ) {
     if (!this.isInitialized || !this.ctx || this.isMuted) return;
 
@@ -801,11 +856,12 @@ export class AudioEngine {
       // 1. Cập nhật Biome & Thời tiết
       this.setBiomeAmbience(biome, weather);
 
-      // 2. Tính toán khoảng cách & âm học 3D cho 15 xe
-      const { sortedCars, activeFlybys } = audioSpatialDirector.processSpatialVehicles(
+      // 2. Tính toán khoảng cách & âm học 3D cho toàn bộ các xe trong đoàn đua
+      const { allCars, sortedCars, activeFlybys } = audioSpatialDirector.processSpatialVehicles(
         cars,
         cameraListener,
-        now
+        now,
+        activeOvertakeCarId
       );
 
       // 3. Lấy 25 Camera Acoustic Profile độc bản từ AudioSpatialDirector
@@ -861,10 +917,11 @@ export class AudioEngine {
         this.triggerFlyby(flyby.speedKmh, flyby.panStart, flyby.panEnd);
       }
 
-      // F. Cập nhật 5 Voices động cơ cận cảnh gần camera nhất
+      // F. Cập nhật đầy đủ 35 Voices động cơ không gian độc lập theo ÁNH XẠ CỐ ĐỊNH 1:1
+      // Mỗi chiếc xe trong đoàn đua sở hữu vĩnh viễn 1 Voice riêng, triệt tiêu 100% hiện tượng nhảy tần số / tráo đổi giọng khi vượt nhau!
       for (let i = 0; i < this.carVoices.length; i++) {
         const voice = this.carVoices[i];
-        const carData = sortedCars[i];
+        const carData = allCars[i];
 
         if (carData) {
           voice.activeCarId = carData.id;
@@ -883,23 +940,28 @@ export class AudioEngine {
           if (persp.isCockpit && i > 0) {
             adjustedVol *= 0.40; // Cabin cách âm xe đối thủ
           }
+          if (carData.isNitro) {
+            adjustedVol *= 1.30; // Tiếng gầm bốc lửa khi phun Nitro
+          }
           voice.gain.gain.setTargetAtTime(adjustedVol, now, 0.04);
 
           // Panning Trái / Phải theo góc quay camera
           voice.panner.pan.setTargetAtTime(carData.pan, now, 0.03);
 
-          // Lọc thông thấp theo độ mở bướm ga
-          voice.filter.frequency.setTargetAtTime(carData.filterCutoff, now, 0.04);
+          // Lọc thông thấp theo độ mở bướm ga và khoảng cách (mở rộng dải tần khi bứt tốc Nitro)
+          const targetCutoff = carData.isNitro ? Math.min(5200, carData.filterCutoff * 1.35) : carData.filterCutoff;
+          voice.filter.frequency.setTargetAtTime(targetCutoff, now, 0.04);
         } else {
+          voice.activeCarId = '';
           voice.gain.gain.setTargetAtTime(0, now, 0.06);
         }
       }
 
-      // G. Cập nhật tiếng gầm gừ tập thể của 10 xe phía sau trong đoàn 15 xe
-      if (this.packGain && this.packPanner && this.packSaw && sortedCars.length > 5) {
+      // G. Tiếng gầm gừ xa xa bổ trợ cho đoàn đua đông đảo (> 10 xe)
+      if (this.packGain && this.packPanner && this.packSaw && sortedCars.length > 10) {
         let avgPan = 0;
         let avgFreq = 0;
-        const remainingCars = sortedCars.slice(5);
+        const remainingCars = sortedCars.slice(10);
 
         for (const rc of remainingCars) {
           avgPan += rc.pan;
@@ -910,7 +972,9 @@ export class AudioEngine {
 
         this.packPanner.pan.setTargetAtTime(Math.max(-0.85, Math.min(0.85, avgPan)), now, 0.06);
         this.packSaw.frequency.setTargetAtTime(Math.max(50, Math.min(190, avgFreq * 0.65)), now, 0.06);
-        this.packGain.gain.setTargetAtTime(0.20, now, 0.06);
+        this.packGain.gain.setTargetAtTime(0.12, now, 0.06);
+      } else if (this.packGain) {
+        this.packGain.gain.setTargetAtTime(0, now, 0.06);
       }
 
       // H. Cập nhật tiếng rít lốp bám đường & gờ giảm tốc Kerb
@@ -1078,11 +1142,9 @@ export class AudioEngine {
       CameraMode.VERTICAL_PORTRAIT_OPTIMIZED,
       CameraMode.SPECTATOR_TRACKSIDE,
       CameraMode.FENDER_WHEEL_LOOK,
-      CameraMode.SIDE_CHASE_MULTI,
       CameraMode.KERB_CAM_GROUND,
       CameraMode.BUMPER_FIRST_PERSON,
       CameraMode.OVERTAKE_ACTION,
-      CameraMode.COLLISION_DRIFT,
       CameraMode.SIDE_PROFILE,
       CameraMode.LEADER_TRACKING,
       CameraMode.CINEMATIC_ORBIT,
@@ -1090,7 +1152,7 @@ export class AudioEngine {
     ];
 
     // Khởi tạo trạng thái dao động các xe đua (Đồng bộ chuẩn 100% với Web Audio Engine trực tiếp)
-    const numCars = Math.max(6, Math.min(15, carsCount));
+    const numCars = Math.max(35, carsCount);
     const carPhases1 = new Float32Array(numCars);
     const carPhases2 = new Float32Array(numCars);
     const carSubPhases = new Float32Array(numCars);
@@ -1280,7 +1342,7 @@ export class AudioEngine {
       }
 
       // Tiếng va quẹt xe đanh thép (Collision Impact Thud)
-      if (currentMode === CameraMode.COLLISION_DRIFT || (t % 11.0) < 0.18) {
+      if ((t % 11.0) < 0.18) {
         const p = (t % 11.0) / 0.18;
         const thud = Math.sin(p * 50) * (1 - p) * 0.12;
         mixLeft += thud;
@@ -1349,6 +1411,666 @@ export class AudioEngine {
     }
 
     return { left, right, totalSamples, timeline };
+  }
+
+  /**
+   * Kết xuất âm thanh CHUẨN XÁC 100% của từng Luồng Game riêng biệt cho Video tải xuống
+   * Sử dụng OfflineAudioContext C++ của trình duyệt với toàn bộ đồ thị Web Audio DSP:
+   * 5 Voices xe cận cảnh + Tiếng gầm bầy đàn + Tiếng rít lốp + Gờ kerb + Gió khí động + Foley Camera + BLV + Limiter
+   * Điều khiển trực tiếp bởi dữ liệu động học (telemetry) thực tế của chính luồng đó ở từng khung hình 60 FPS
+   */
+  async renderInstanceAudioOffline(
+    telemetry: InstanceTelemetrySnapshot[],
+    durationSeconds: number,
+    sampleRate: number = 44100,
+    instanceId: number = 1,
+    seed: number = 632585,
+    biome?: TrackBiome | string,
+    weather?: WeatherType | string,
+    lang: 'vi' | 'en' = 'vi'
+  ): Promise<{ left: Float32Array; right: Float32Array; totalSamples: number }> {
+    const totalSamples = Math.floor(durationSeconds * sampleRate);
+    const timeline = commentarySoundManager.getTimelineForInstance(instanceId, seed, durationSeconds, lang);
+
+    if (typeof OfflineAudioContext !== 'undefined' && telemetry && telemetry.length > 0) {
+      try {
+        // Đặt lại trạng thái Doppler tracking để batch render hoàn toàn thuần khiết và chuẩn xác 100%
+        audioSpatialDirector.resetState();
+
+        const offlineCtx = new OfflineAudioContext(2, totalSamples, sampleRate);
+
+        // 1. Master Limiter & Compressor
+        const limiter = offlineCtx.createDynamicsCompressor();
+        limiter.threshold.setValueAtTime(-12, 0);
+        limiter.knee.setValueAtTime(10, 0);
+        limiter.ratio.setValueAtTime(8, 0);
+        limiter.attack.setValueAtTime(0.003, 0);
+        limiter.release.setValueAtTime(0.15, 0);
+        limiter.connect(offlineCtx.destination);
+
+        const masterGain = offlineCtx.createGain();
+        masterGain.gain.setValueAtTime(0.92, 0);
+        masterGain.connect(limiter);
+
+        // Bộ lọc Camera Acoustic Filter và EQ chuẩn Live Stream:
+        // Đảm bảo buồng lái tiêu âm 880Hz, góc đuôi gió bass heavy, v.v. giống 100% khi nghe trên màn hình
+        const cameraAcousticFilter = offlineCtx.createBiquadFilter();
+        cameraAcousticFilter.type = 'lowpass';
+        cameraAcousticFilter.frequency.setValueAtTime(18000, 0);
+        cameraAcousticFilter.Q.setValueAtTime(0.85, 0);
+
+        const cameraEqLow = offlineCtx.createBiquadFilter();
+        cameraEqLow.type = 'lowshelf';
+        cameraEqLow.frequency.setValueAtTime(250, 0);
+        cameraEqLow.gain.setValueAtTime(0, 0);
+
+        const cameraEqHigh = offlineCtx.createBiquadFilter();
+        cameraEqHigh.type = 'highshelf';
+        cameraEqHigh.frequency.setValueAtTime(4500, 0);
+        cameraEqHigh.gain.setValueAtTime(0, 0);
+
+        const engineBus = offlineCtx.createGain();
+        engineBus.gain.setValueAtTime(0.85, 0);
+
+        const tireBus = offlineCtx.createGain();
+        tireBus.gain.setValueAtTime(0.9, 0);
+
+        const windBus = offlineCtx.createGain();
+        windBus.gain.setValueAtTime(0.7, 0);
+
+        // Engine, Tire, Wind đi qua Camera Acoustic Filter và EQ trước khi vào Master Gain
+        engineBus.connect(cameraAcousticFilter);
+        tireBus.connect(cameraAcousticFilter);
+        windBus.connect(cameraAcousticFilter);
+
+        cameraAcousticFilter.connect(cameraEqLow);
+        cameraEqLow.connect(cameraEqHigh);
+        cameraEqHigh.connect(masterGain);
+
+        const envBus = offlineCtx.createGain();
+        envBus.gain.setValueAtTime(0.65, 0);
+        envBus.connect(masterGain);
+
+        const commentaryBus = offlineCtx.createGain();
+        commentaryBus.gain.setValueAtTime(1.0, 0);
+        commentaryBus.connect(masterGain);
+
+        const collisionBus = offlineCtx.createGain();
+        collisionBus.gain.setValueAtTime(1.0, 0);
+        collisionBus.connect(masterGain);
+
+        // 2. White/Pink Noise Buffer
+        const noiseBuffer = offlineCtx.createBuffer(2, Math.min(totalSamples, Math.floor(sampleRate * 2.0)), sampleRate);
+        const nbL = noiseBuffer.getChannelData(0);
+        const nbR = noiseBuffer.getChannelData(1);
+        let b0 = 0, b1 = 0, b2 = 0;
+        for (let s = 0; s < noiseBuffer.length; s++) {
+          const white = Math.random() * 2 - 1;
+          b0 = 0.99886 * b0 + white * 0.0555179;
+          b1 = 0.99332 * b1 + white * 0.0750759;
+          b2 = 0.96900 * b2 + white * 0.1538520;
+          const pink = (b0 + b1 + b2 + white * 0.5362) * 0.16;
+          nbL[s] = pink;
+          nbR[s] = pink * 0.92 + (Math.random() * 2 - 1) * 0.04;
+        }
+
+        // 3. TOÀN BỘ VOICES ĐỘNG CƠ CẬN CẢNH KHÔNG GIAN CHO TẤT CẢ CÁC XE (LÊN TỚI 35 XE HOẶC HƠN)
+        const frameCarsCount = telemetry[0]?.cars?.length || 15;
+        const totalVoiceCount = Math.max(35, frameCarsCount);
+
+        interface OfflineVoice {
+          oscSaw: OscillatorNode;
+          oscSub: OscillatorNode;
+          oscPulse: OscillatorNode;
+          filter: BiquadFilterNode;
+          panner: StereoPannerNode;
+          gain: GainNode;
+        }
+        const voices: OfflineVoice[] = [];
+        for (let v = 0; v < totalVoiceCount; v++) {
+          const oscSaw = offlineCtx.createOscillator();
+          oscSaw.type = 'sawtooth';
+          const oscSub = offlineCtx.createOscillator();
+          oscSub.type = 'triangle';
+          const oscPulse = offlineCtx.createOscillator();
+          oscPulse.type = 'square';
+
+          const filter = offlineCtx.createBiquadFilter();
+          filter.type = 'lowpass';
+          filter.Q.setValueAtTime(2.2, 0);
+
+          const panner = offlineCtx.createStereoPanner();
+          const gain = offlineCtx.createGain();
+          gain.gain.setValueAtTime(0, 0);
+
+          oscSaw.connect(filter);
+          oscSub.connect(filter);
+          oscPulse.connect(filter);
+          filter.connect(panner);
+          panner.connect(gain);
+          gain.connect(engineBus);
+
+          oscSaw.start(0);
+          oscSub.start(0);
+          oscPulse.start(0);
+
+          voices.push({ oscSaw, oscSub, oscPulse, filter, panner, gain });
+        }
+
+        // 4. Pack roar voice
+        const packSaw = offlineCtx.createOscillator();
+        packSaw.type = 'sawtooth';
+        const packSub = offlineCtx.createOscillator();
+        packSub.type = 'triangle';
+        const packFilter = offlineCtx.createBiquadFilter();
+        packFilter.type = 'lowpass';
+        packFilter.frequency.setValueAtTime(450, 0);
+        const packPanner = offlineCtx.createStereoPanner();
+        const packGain = offlineCtx.createGain();
+        packGain.gain.setValueAtTime(0.16, 0);
+
+        packSaw.connect(packFilter);
+        packSub.connect(packFilter);
+        packFilter.connect(packPanner);
+        packPanner.connect(packGain);
+        packGain.connect(engineBus);
+
+        packSaw.start(0);
+        packSub.start(0);
+
+        // 5. Tire Skid screech
+        const skidFilter = offlineCtx.createBiquadFilter();
+        skidFilter.type = 'bandpass';
+        skidFilter.frequency.setValueAtTime(2600, 0);
+        skidFilter.Q.setValueAtTime(3.2, 0);
+        const skidPanner = offlineCtx.createStereoPanner();
+        const skidGain = offlineCtx.createGain();
+        skidGain.gain.setValueAtTime(0, 0);
+
+        const skidSource = offlineCtx.createBufferSource();
+        skidSource.buffer = noiseBuffer;
+        skidSource.loop = true;
+        skidSource.connect(skidFilter);
+        skidFilter.connect(skidPanner);
+        skidPanner.connect(skidGain);
+        skidGain.connect(tireBus);
+        skidSource.start(0);
+
+        // 6. Kerb Rumble
+        const kerbOsc = offlineCtx.createOscillator();
+        kerbOsc.type = 'sawtooth';
+        kerbOsc.frequency.setValueAtTime(65, 0);
+        const kerbFilter = offlineCtx.createBiquadFilter();
+        kerbFilter.type = 'bandpass';
+        kerbFilter.frequency.setValueAtTime(140, 0);
+        kerbFilter.Q.setValueAtTime(3.8, 0);
+        const kerbGain = offlineCtx.createGain();
+        kerbGain.gain.setValueAtTime(0, 0);
+
+        kerbOsc.connect(kerbFilter);
+        kerbFilter.connect(kerbGain);
+        kerbGain.connect(tireBus);
+        kerbOsc.start(0);
+
+        // 7. Helicopter Foley
+        const heliOsc = offlineCtx.createOscillator();
+        heliOsc.type = 'sawtooth';
+        heliOsc.frequency.setValueAtTime(68, 0);
+        const heliLfo = offlineCtx.createOscillator();
+        heliLfo.type = 'sine';
+        heliLfo.frequency.setValueAtTime(19.2, 0);
+        const heliLfoGain = offlineCtx.createGain();
+        heliLfoGain.gain.setValueAtTime(0.75, 0);
+        const heliFilter = offlineCtx.createBiquadFilter();
+        heliFilter.type = 'lowpass';
+        heliFilter.frequency.setValueAtTime(320, 0);
+        const heliGain = offlineCtx.createGain();
+        heliGain.gain.setValueAtTime(0, 0);
+
+        heliLfo.connect(heliLfoGain.gain);
+        heliOsc.connect(heliFilter);
+        heliFilter.connect(heliLfoGain);
+        heliLfoGain.connect(heliGain);
+        heliGain.connect(envBus);
+
+        heliOsc.start(0);
+        heliLfo.start(0);
+
+        // 8. Wind
+        const windFilter = offlineCtx.createBiquadFilter();
+        windFilter.type = 'bandpass';
+        windFilter.frequency.setValueAtTime(550, 0);
+        windFilter.Q.setValueAtTime(1.8, 0);
+        const windGain = offlineCtx.createGain();
+        windGain.gain.setValueAtTime(0.08, 0);
+
+        const windSource = offlineCtx.createBufferSource();
+        windSource.buffer = noiseBuffer;
+        windSource.loop = true;
+        windSource.connect(windFilter);
+        windFilter.connect(windGain);
+        windGain.connect(windBus);
+        windSource.start(0);
+
+        // 9. Biome Ambience
+        const ambType = audioSpatialDirector.resolveBiomeAmbience(biome, weather);
+        const ambFilter = offlineCtx.createBiquadFilter();
+        const ambGain = offlineCtx.createGain();
+        if (ambType === 'MOUNTAIN_WIND') {
+          ambFilter.type = 'bandpass';
+          ambFilter.frequency.setValueAtTime(450, 0);
+          ambFilter.Q.setValueAtTime(3.2, 0);
+          ambGain.gain.setValueAtTime(0.18, 0);
+        } else if (ambType === 'RAIN' || ambType === 'THUNDERSTORM') {
+          ambFilter.type = 'bandpass';
+          ambFilter.frequency.setValueAtTime(2400, 0);
+          ambFilter.Q.setValueAtTime(1.9, 0);
+          ambGain.gain.setValueAtTime(0.22, 0);
+        } else if (ambType === 'DESERT_SAND') {
+          ambFilter.type = 'highpass';
+          ambFilter.frequency.setValueAtTime(1600, 0);
+          ambFilter.Q.setValueAtTime(1.4, 0);
+          ambGain.gain.setValueAtTime(0.14, 0);
+        } else {
+          ambFilter.type = 'bandpass';
+          ambFilter.frequency.setValueAtTime(880, 0);
+          ambFilter.Q.setValueAtTime(1.5, 0);
+          ambGain.gain.setValueAtTime(0.12, 0);
+        }
+        const ambSource = offlineCtx.createBufferSource();
+        ambSource.buffer = noiseBuffer;
+        ambSource.loop = true;
+        ambSource.connect(ambFilter);
+        ambFilter.connect(ambGain);
+        ambGain.connect(envBus);
+        ambSource.start(0);
+
+        // 10. Commentary voice audio clips
+        for (const evt of timeline) {
+          if (evt.audioBuffer && evt.startSec < durationSeconds) {
+            try {
+              const cSrc = offlineCtx.createBufferSource();
+              cSrc.buffer = evt.audioBuffer;
+              cSrc.connect(commentaryBus);
+              cSrc.start(evt.startSec);
+            } catch {}
+          }
+        }
+
+        // 11. Automate graph parameters along the exact 60 FPS frame telemetry of THIS instance
+        let lastEventTime = -0.001;
+        let lastOfflineCollisionT = -10.0;
+        for (let k = 0; k < telemetry.length; k++) {
+          const frame = telemetry[k];
+          let t = (k / telemetry.length) * (durationSeconds - 0.005);
+          if (k > 0 && t <= lastEventTime) {
+            t = lastEventTime + 0.0001;
+          }
+          lastEventTime = t;
+          const isFirstFrame = (k === 0);
+
+          const autoVal = (param: AudioParam, val: number) => {
+            if (isFirstFrame) {
+              param.setValueAtTime(val, 0);
+            } else {
+              param.linearRampToValueAtTime(val, t);
+            }
+          };
+
+          const persp = audioSpatialDirector.getCameraPerspective(frame.cameraMode, frame.cameraSpeed);
+          const listener: SpatialCameraListener = {
+            position: frame.cameraPos,
+            forward: frame.cameraDir,
+            mode: frame.cameraMode,
+            speedKmh: frame.cameraSpeed
+          };
+          const { allCars, sortedCars, activeFlybys } = audioSpatialDirector.processSpatialVehicles(
+            frame.cars,
+            listener,
+            t,
+            frame.activeOvertakeCarId
+          );
+
+          // Cập nhật Camera Acoustic Filter & EQ theo góc quay hiện tại
+          autoVal(cameraAcousticFilter.frequency, persp.cabinMuffleCutoff);
+          if (persp.masterEqPreset === 'bass_heavy') {
+            autoVal(cameraEqLow.gain, 4.5);
+            autoVal(cameraEqHigh.gain, -1.5);
+          } else if (persp.masterEqPreset === 'mobile_punch') {
+            autoVal(cameraEqLow.gain, 2.0);
+            autoVal(cameraEqHigh.gain, 3.0);
+          } else if (persp.masterEqPreset === 'tunnel_hollow') {
+            autoVal(cameraEqLow.gain, 6.0);
+            autoVal(cameraEqHigh.gain, -4.0);
+          } else if (persp.masterEqPreset === 'treble_cut') {
+            autoVal(cameraEqLow.gain, 3.0);
+            autoVal(cameraEqHigh.gain, -8.0);
+          } else {
+            autoVal(cameraEqLow.gain, 0);
+            autoVal(cameraEqHigh.gain, 0);
+          }
+
+          // Tiếng xé gió vụt qua / bứt tốc vượt mặt ("vèo vèo") (High-Speed Overtake Flyby Whoosh)
+          // Xé gió êm dịu, mượt mà không bị bụp chẹt
+          if (activeFlybys && activeFlybys.length > 0 && t < durationSeconds - 0.45) {
+            for (const fb of activeFlybys) {
+              try {
+                const flybySrc = offlineCtx.createBufferSource();
+                flybySrc.buffer = noiseBuffer;
+
+                const flybyFilt = offlineCtx.createBiquadFilter();
+                flybyFilt.type = 'bandpass';
+                flybyFilt.frequency.setValueAtTime(3200, t);
+                flybyFilt.frequency.exponentialRampToValueAtTime(420, t + 0.42);
+                flybyFilt.Q.setValueAtTime(1.8, t);
+
+                const bodySrc = offlineCtx.createBufferSource();
+                bodySrc.buffer = noiseBuffer;
+
+                const bodyFilt = offlineCtx.createBiquadFilter();
+                bodyFilt.type = 'lowpass';
+                bodyFilt.frequency.setValueAtTime(680, t);
+                bodyFilt.frequency.exponentialRampToValueAtTime(180, t + 0.45);
+                bodyFilt.Q.setValueAtTime(1.2, t);
+
+                const fbPanner = offlineCtx.createStereoPanner();
+                fbPanner.pan.setValueAtTime(fb.panStart, t);
+                fbPanner.pan.linearRampToValueAtTime(fb.panEnd, t + 0.42);
+
+                const fbGain = offlineCtx.createGain();
+                const intensity = Math.min(0.35, 0.18 + (fb.speedKmh / 650) * 0.17);
+                fbGain.gain.setValueAtTime(0.001, t);
+                fbGain.gain.linearRampToValueAtTime(intensity, t + 0.10);
+                fbGain.gain.exponentialRampToValueAtTime(0.001, t + 0.48);
+
+                flybySrc.connect(flybyFilt);
+                bodySrc.connect(bodyFilt);
+                flybyFilt.connect(fbPanner);
+                bodyFilt.connect(fbPanner);
+                fbPanner.connect(fbGain);
+                fbGain.connect(windBus);
+
+                flybySrc.start(t);
+                flybySrc.stop(t + 0.50);
+                bodySrc.start(t);
+                bodySrc.stop(t + 0.50);
+              } catch {}
+            }
+          }
+
+          // Cập nhật toàn bộ totalVoiceCount xe độc lập theo ÁNH XẠ CỐ ĐỊNH 1:1
+          for (let v = 0; v < totalVoiceCount; v++) {
+            const voice = voices[v];
+            const car = allCars[v];
+            if (car) {
+              autoVal(voice.oscSaw.frequency, Math.max(20, Math.min(1200, car.engineFreq)));
+              autoVal(voice.oscSub.frequency, Math.max(12, Math.min(600, car.engineFreq * 0.502)));
+              autoVal(voice.oscPulse.frequency, Math.max(30, Math.min(2400, car.engineFreq * 2.01)));
+              autoVal(voice.filter.frequency, Math.max(180, Math.min(5200, car.filterCutoff)));
+              autoVal(voice.panner.pan, Math.max(-0.95, Math.min(0.95, car.pan)));
+              let vol = car.volume * persp.exhaustDirectness * 0.42;
+              if (persp.isCockpit && v > 0) vol *= 0.40;
+              if (car.isNitro) vol *= 1.30;
+              autoVal(voice.gain.gain, Math.max(0, Math.min(1.0, vol)));
+            } else {
+              autoVal(voice.gain.gain, 0);
+            }
+          }
+
+          // Tiếng va chạm / quẹt sườn xe (Collision impact) - Cooldown tối thiểu 2 giây, dùng sóng Triangle êm ái
+          if (frame.collisionCarId && t - lastOfflineCollisionT > 2.0 && t < durationSeconds - 0.3) {
+            lastOfflineCollisionT = t;
+            try {
+              const cOsc = offlineCtx.createOscillator();
+              cOsc.type = 'triangle';
+              cOsc.frequency.setValueAtTime(95, t);
+              cOsc.frequency.exponentialRampToValueAtTime(32, t + 0.18);
+
+              const cFilter = offlineCtx.createBiquadFilter();
+              cFilter.type = 'lowpass';
+              cFilter.frequency.setValueAtTime(220, t);
+
+              const cGain = offlineCtx.createGain();
+              const intensity = frame.collisionIntensity ?? 0.85;
+              cGain.gain.setValueAtTime(0.001, t);
+              cGain.gain.linearRampToValueAtTime(Math.min(0.40, intensity * 0.35), t + 0.02);
+              cGain.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+
+              const cPan = offlineCtx.createStereoPanner();
+              let collisionPan = 0;
+              const colCar = allCars.find(c => c.id === frame.collisionCarId);
+              if (colCar) collisionPan = colCar.pan;
+              cPan.pan.setValueAtTime(Math.max(-0.85, Math.min(0.85, collisionPan)), t);
+
+              cOsc.connect(cFilter);
+              cFilter.connect(cGain);
+              cGain.connect(cPan);
+              cPan.connect(collisionBus);
+              cOsc.start(t);
+              cOsc.stop(t + 0.24);
+            } catch {}
+          }
+
+          if (sortedCars.length > 10) {
+            let avgPan = 0;
+            let avgFreq = 0;
+            const rem = sortedCars.slice(10);
+            for (const rc of rem) {
+              avgPan += rc.pan;
+              avgFreq += rc.engineFreq;
+            }
+            autoVal(packPanner.pan, Math.max(-0.85, Math.min(0.85, avgPan / rem.length)));
+            autoVal(packSaw.frequency, Math.max(50, Math.min(190, (avgFreq / rem.length) * 0.65)));
+            autoVal(packGain.gain, 0.12);
+          } else {
+            autoVal(packGain.gain, 0);
+          }
+
+          const drifting = sortedCars.find(c => c.isDrifting || c.isBraking);
+          if (drifting) {
+            autoVal(skidGain.gain, Math.min(0.42, drifting.volume * 0.45));
+            autoVal(skidPanner.pan, Math.max(-0.9, Math.min(0.9, drifting.pan)));
+          } else {
+            autoVal(skidGain.gain, 0);
+          }
+
+          if (persp.isKerbCam || (sortedCars[0] && Math.abs(sortedCars[0].pan) > 0.65)) {
+            autoVal(kerbGain.gain, Math.min(0.38, 0.15 * persp.kerbRumbleBoost));
+          } else {
+            autoVal(kerbGain.gain, 0);
+          }
+
+          if (persp.isHelicopter) {
+            autoVal(heliLfo.frequency, persp.helicopterRotorFreq);
+            autoVal(heliGain.gain, persp.helicopterRotorVol * 0.85);
+          } else {
+            autoVal(heliGain.gain, 0);
+          }
+
+          autoVal(windGain.gain, persp.windVolume * 0.55);
+          autoVal(windFilter.frequency, 450 + persp.windSpeedFactor * 1800);
+        }
+
+        const rendered = await offlineCtx.startRendering();
+        return {
+          left: rendered.getChannelData(0),
+          right: rendered.getChannelData(1),
+          totalSamples: rendered.length
+        };
+      } catch (err) {
+        console.warn('Lỗi OfflineAudioContext, sử dụng telemetry DSP renderer dự phòng:', err);
+      }
+    }
+
+    // Dự phòng khi OfflineAudioContext không khả dụng: tính toán DSP trực tiếp từ telemetry của chính luồng đó
+    return this.renderInstanceAudioPCMFromTelemetry(telemetry, durationSeconds, sampleRate, timeline, biome, weather);
+  }
+
+  /**
+   * Tính toán DSP trực tiếp từ telemetry thực tế của luồng đua (dự phòng chính xác cao)
+   */
+  private renderInstanceAudioPCMFromTelemetry(
+    telemetry: InstanceTelemetrySnapshot[],
+    durationSeconds: number,
+    sampleRate: number,
+    timeline: ScheduledCommentaryEvent[],
+    biome?: TrackBiome | string,
+    weather?: WeatherType | string
+  ): { left: Float32Array; right: Float32Array; totalSamples: number } {
+    const totalSamples = Math.floor(durationSeconds * sampleRate);
+    const left = new Float32Array(totalSamples);
+    const right = new Float32Array(totalSamples);
+
+    const numCars = Math.max(35, (telemetry && telemetry[0]?.cars?.length) || 35);
+    const carPhases1 = new Float32Array(numCars);
+    const carPhases2 = new Float32Array(numCars);
+    const carPhases3 = new Float32Array(numCars);
+    let heliPhase = 0;
+
+    // 1. Tiền xử lý dữ liệu âm học 3D một lần cho toàn bộ các frame telemetry (siêu tốc, triệt tiêu 100% nghẽn CPU)
+    audioSpatialDirector.resetState();
+    const ambType = audioSpatialDirector.resolveBiomeAmbience(biome, weather);
+    const frameAcoustics = (telemetry || []).map(frame => {
+      const listener: SpatialCameraListener = {
+        position: frame.cameraPos,
+        forward: frame.cameraDir,
+        mode: frame.cameraMode,
+        speedKmh: frame.cameraSpeed
+      };
+      const { allCars, sortedCars, activeFlybys } = audioSpatialDirector.processSpatialVehicles(
+        frame.cars,
+        listener,
+        frame.timeSec,
+        frame.activeOvertakeCarId
+      );
+      const persp = audioSpatialDirector.getCameraPerspective(frame.cameraMode, frame.cameraSpeed);
+      const drifting = sortedCars.find(c => c.isDrifting || c.isBraking);
+      const shiftCar = allCars.find(c => c.hasShiftPop);
+      const colCar = frame.collisionCarId ? allCars.find(c => c.id === frame.collisionCarId) : null;
+      return {
+        allCars,
+        persp,
+        drifting,
+        activeFlybys: activeFlybys && activeFlybys.length > 0 ? activeFlybys : null,
+        collisionCarId: frame.collisionCarId,
+        collisionIntensity: frame.collisionIntensity ?? 0.85,
+        collisionPan: colCar ? colCar.pan : 0,
+        hasShiftPop: Boolean(shiftCar),
+        shiftCarPan: shiftCar ? shiftCar.pan : 0
+      };
+    });
+
+    for (let i = 0; i < totalSamples; i++) {
+      const t = i / sampleRate;
+
+      // Tìm frame telemetry tương ứng với thời điểm t - Khóa pha chính xác 100%, loại bỏ hoàn toàn độ trôi dạt
+      const frameIdx = telemetry && telemetry.length > 0
+        ? Math.min(telemetry.length - 1, Math.max(0, Math.floor((t / durationSeconds) * telemetry.length)))
+        : -1;
+      const frameData = frameIdx >= 0 && frameAcoustics[frameIdx] ? frameAcoustics[frameIdx] : null;
+      const persp = frameData ? frameData.persp : audioSpatialDirector.getCameraPerspective(CameraMode.CHOPPER_HELI_CHASE, 420);
+
+      // Kiểm tra Commentary & Audio Ducking
+      let commL = 0;
+      let commR = 0;
+      let isCommentarySpeaking = false;
+      for (const evt of timeline) {
+        if (t >= evt.startSec && t < evt.startSec + evt.durationSec && evt.pcmLeft) {
+          const off = t - evt.startSec;
+          const idx = Math.floor(off * (evt.sampleRate || sampleRate));
+          if (idx < evt.pcmLeft.length) {
+            commL = evt.pcmLeft[idx] * 1.35;
+            commR = (evt.pcmRight ? evt.pcmRight[idx] : evt.pcmLeft[idx]) * 1.35;
+            isCommentarySpeaking = true;
+          }
+          break;
+        }
+      }
+      const duckMultiplier = isCommentarySpeaking ? 0.52 : 1.0;
+
+      let mixLeft = 0;
+      let mixRight = 0;
+
+      if (frameData && frameData.allCars.length > 0) {
+        for (let c = 0; c < Math.min(numCars, frameData.allCars.length); c++) {
+          const car = frameData.allCars[c];
+          const engineHz = Math.max(25, Math.min(1100, car.engineFreq));
+          carPhases1[c] += (2 * Math.PI * engineHz) / sampleRate;
+          carPhases2[c] += (2 * Math.PI * engineHz * 0.502) / sampleRate;
+          carPhases3[c] += (2 * Math.PI * engineHz * 2.01) / sampleRate;
+          if (carPhases1[c] > 2 * Math.PI) carPhases1[c] -= 2 * Math.PI;
+          if (carPhases2[c] > 2 * Math.PI) carPhases2[c] -= 2 * Math.PI;
+          if (carPhases3[c] > 2 * Math.PI) carPhases3[c] -= 2 * Math.PI;
+
+          const saw = (carPhases1[c] / Math.PI) - 1.0;
+          const tri = Math.abs((carPhases2[c] / Math.PI) - 1.0) * 2 - 1.0;
+          const pulse = Math.sign(Math.sin(carPhases3[c])) * 0.35;
+          const raw = saw * 0.55 + tri * 0.30 + pulse * 0.15;
+
+          let vol = car.volume * persp.exhaustDirectness * 0.42 * (persp.isCockpit && c > 0 ? 0.40 : 1.0);
+          if (car.isNitro) vol *= 1.30;
+          const panL = 0.5 * (1 - car.pan);
+          const panR = 0.5 * (1 + car.pan);
+
+          mixLeft += raw * vol * panL;
+          mixRight += raw * vol * panR;
+        }
+
+        // Tiếng rít lốp bám đường / drift
+        if (frameData.drifting) {
+          const noise = (Math.random() * 2 - 1) * 0.20 * Math.min(1.0, frameData.drifting.volume * 0.35);
+          mixLeft += noise * (1 - frameData.drifting.pan) * 0.5;
+          mixRight += noise * (1 + frameData.drifting.pan) * 0.5;
+        }
+
+        // Tiếng xé gió vụt qua / bứt tốc vượt mặt ("vèo vèo") (Flyby Whoosh)
+        if (frameData.activeFlybys) {
+          for (const fb of frameData.activeFlybys) {
+            const timeSinceFlyby = t - fb.timestamp;
+            if (timeSinceFlyby >= 0 && timeSinceFlyby < 0.45) {
+              const env = Math.sin((timeSinceFlyby / 0.45) * Math.PI);
+              const whooshPan = fb.panStart + (fb.panEnd - fb.panStart) * (timeSinceFlyby / 0.45);
+              const whooshNoise = (Math.random() * 2 - 1) * 0.16 * env;
+              mixLeft += whooshNoise * Math.max(0, 1 - whooshPan) * 0.5;
+              mixRight += whooshNoise * Math.max(0, 1 + whooshPan) * 0.5;
+            }
+          }
+        }
+      }
+
+      // Gió lướt camera khí động học phi tuyến tính
+      if (persp.windVolume > 0.05) {
+        const wind = (Math.random() * 2 - 1) * (persp.windVolume * 0.10);
+        mixLeft += wind;
+        mixRight += wind;
+      }
+
+      // Biome Ambience (mưa bão, gió núi, sa mạc)
+      if (ambType === 'RAIN' || ambType === 'THUNDERSTORM') {
+        const rainHiss = (Math.random() * 2 - 1) * 0.038;
+        mixLeft += rainHiss;
+        mixRight += rainHiss;
+      } else if (ambType === 'MOUNTAIN_WIND' || ambType === 'DESERT_SAND') {
+        const windHiss = (Math.random() * 2 - 1) * 0.026;
+        mixLeft += windHiss;
+        mixRight += windHiss;
+      }
+
+      // Helicopter Foley
+      if (persp.isHelicopter) {
+        heliPhase += (2 * Math.PI * persp.helicopterRotorFreq) / sampleRate;
+        if (heliPhase > 2 * Math.PI) heliPhase -= 2 * Math.PI;
+        const blade = Math.pow(Math.max(0, Math.sin(heliPhase)), 4) * (persp.helicopterRotorVol * 0.85);
+        mixLeft += blade;
+        mixRight += blade;
+      }
+
+      // Master output với ducking và Soft Limiter
+      left[i] = Math.tanh((mixLeft * duckMultiplier + commL) * 0.95) * 0.92;
+      right[i] = Math.tanh((mixRight * duckMultiplier + commR) * 0.95) * 0.92;
+    }
+
+    return { left, right, totalSamples };
   }
 }
 

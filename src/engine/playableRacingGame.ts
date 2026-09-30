@@ -4,7 +4,7 @@ import { audioEngine } from './audioEngine';
 import { commentaryEngine } from './commentaryEngine';
 import { carModelManager } from './carModelManager';
 import { generatePointsForLayout } from './trackLayouts';
-import { getTrackVisualTheme, createRoadTexture } from './trackThemes';
+import { getTrackVisualTheme, createRoadTexture, getTrackColorForInstance } from './trackThemes';
 import { SpatialAudioSource, SpatialCameraListener } from './audioSpatialDirector';
 
 export type DrivingAssistMode = 'BEGINNER' | 'SPORT' | 'SIMULATION';
@@ -282,8 +282,13 @@ export class PlayableRacingGame {
     const segments = 1200;
     const roadHalfWidth = this.trackWidth / 2;
     const positions: number[] = [];
+    const colors: number[] = [];
     const uvs: number[] = [];
     const indices: number[] = [];
+
+    // Chọn 1 màu sắc rực rỡ riêng biệt từ 30 màu cho layout đường đua hiện tại
+    const roadTheme = getTrackColorForInstance(1, this.currentLayout.charCodeAt(0));
+    const roadCol = new THREE.Color(roadTheme.hex);
 
     for (let i = 0; i <= segments; i++) {
       const u = i / segments;
@@ -297,6 +302,9 @@ export class PlayableRacingGame {
       positions.push(left.x, left.y + 0.12, left.z);
       positions.push(right.x, right.y + 0.12, right.z);
 
+      colors.push(roadCol.r, roadCol.g, roadCol.b);
+      colors.push(roadCol.r, roadCol.g, roadCol.b);
+
       uvs.push(0, (i / segments) * 450);
       uvs.push(1, (i / segments) * 450);
 
@@ -309,6 +317,7 @@ export class PlayableRacingGame {
 
     const roadGeo = new THREE.BufferGeometry();
     roadGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    roadGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     roadGeo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
     roadGeo.setIndex(indices);
     roadGeo.computeVertexNormals();
@@ -317,9 +326,11 @@ export class PlayableRacingGame {
     const roadTexture = createRoadTexture(theme);
 
     const roadMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      vertexColors: true,
       map: roadTexture,
-      roughness: 0.65,
-      metalness: 0.15,
+      roughness: 0.50,
+      metalness: 0.20,
       side: THREE.DoubleSide
     });
 

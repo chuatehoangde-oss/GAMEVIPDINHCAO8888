@@ -75,14 +75,8 @@ export const InstanceDetailModal: React.FC<InstanceDetailModalProps> = ({
       tag: 'Vượt Mặt'
     },
     {
-      mode: CameraMode.COLLISION_DRIFT,
-      label: '8. Va Chạm & Drift',
-      desc: 'Bắt khoảnh khắc trượt bánh, bốc khói và va chạm',
-      tag: 'Drift & Va Chạm'
-    },
-    {
       mode: CameraMode.CINEMATIC_ORBIT,
-      label: '9. Xoay 360 Vòng',
+      label: '8. Xoay 360 Vòng',
       desc: 'Quỹ đạo xoay mượt mà liên tục quanh xe',
       tag: 'Orbit 360°'
     },
@@ -143,12 +137,6 @@ export const InstanceDetailModal: React.FC<InstanceDetailModalProps> = ({
       label: '8. Trạm Quay Mép Cua Apex',
       desc: 'Đón xe ôm cua ép sát mép đường cua kịch tính với độ ổn định cao',
       tag: 'Góc Cua Apex'
-    },
-    {
-      mode: CameraMode.SIDE_CHASE_MULTI,
-      label: '9. Hông Xa So Kè Nhiều Xe',
-      desc: 'Chạy song song cạnh đoàn xe cách 32m bao quát các cặp xe đua so kè',
-      tag: 'Hông Xa Nhóm'
     },
     {
       mode: CameraMode.PIT_WALL_BROADCAST,

@@ -4,7 +4,7 @@ import { MultiInstanceEngine } from '../engine/multiInstanceEngine';
 import { SystemConfig, VideoRecordJob } from '../types';
 import { WebCodecsVideoEncoderSession } from './webCodecsRecorder';
 import { generateFamousDriversVideoFileName } from '../utils/naming';
-import { audioEngine } from '../engine/audioEngine';
+import { audioEngine, InstanceTelemetrySnapshot } from '../engine/audioEngine';
 import { commentarySoundManager } from '../engine/commentarySoundManager';
 import { commentaryEngine } from '../engine/commentaryEngine';
 import fixWebmDuration from 'fix-webm-duration';
@@ -333,26 +333,25 @@ export class VideoRecorderService {
     const totalTimeStr = `${pad(Math.floor(totalSecs / 60))}:${pad(Math.floor(totalSecs) % 60)}`;
     const distKm = ((elapsedSecs / Math.max(1, totalSecs)) * 35.0).toFixed(1);
 
-    // OVERLAY BẢNG TÊN GIỚI THIỆU XUẤT PHÁT (Từ giây thứ 3 đến giây thứ 6)
-    // Hiển thị chuẩn xác danh sách 6, 15, hoặc 60 tay đua ngẫu nhiên thực tế trên đường đua
+    // OVERLAY BẢNG TÊN GIỚI THIỆU XUẤT PHÁT (Từ giây thứ 3 đến giây thứ 6.5)
+    // Hiển thị chuẩn xác và đầy đủ 100% tất cả các tay đua tham gia cuộc đua (Đồng bộ tuyệt đối với màn hình Game)
     const currentRaceSecs = customElapsedSecs !== undefined ? customElapsedSecs : instance.chunkTimeElapsed;
     if (currentRaceSecs >= 3.0 && currentRaceSecs <= 6.5) {
       ctx.save();
-      const cardX = 45;
-      const cardY = 220;
-      const cardW = 560;
-      
       const actualCars = instance.cars && instance.cars.length > 0 ? instance.cars : [];
       const totalRacerCount = actualCars.length;
       
-      // Xác định số lượng xe hiển thị chi tiết (6 xe cho nhóm 6 hoặc top 6 hàng đầu cho 15/60 xe)
-      const displayCount = Math.min(6, totalRacerCount);
-      const rowH = 78;
-      const hasMoreRacers = totalRacerCount > 6;
-      const cardH = 130 + displayCount * rowH + (hasMoreRacers ? 46 : 10);
+      const isTwoCol = totalRacerCount > 6;
+      const cardX = 40;
+      const cardY = 200;
+      const cardW = 1000;
+      
+      const colRows = isTwoCol ? Math.ceil(totalRacerCount / 2) : totalRacerCount;
+      const rowH = totalRacerCount > 18 ? 48 : (totalRacerCount > 12 ? 52 : 58);
+      const cardH = 115 + colRows * rowH + 14;
 
-      // Nền kính tối mờ thanh lịch
-      ctx.fillStyle = 'rgba(7, 11, 22, 0.92)';
+      // Nền kính tối mờ thanh lịch chuẩn đồ họa phát sóng thể thao F1
+      ctx.fillStyle = 'rgba(7, 11, 22, 0.94)';
       ctx.beginPath();
       if ((ctx as any).roundRect) {
         (ctx as any).roundRect(cardX, cardY, cardW, cardH, 16);
@@ -362,42 +361,47 @@ export class VideoRecorderService {
       ctx.fill();
 
       // Viền neon cyan mảnh tinh tế
-      ctx.strokeStyle = 'rgba(6, 182, 212, 0.6)';
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(6, 182, 212, 0.65)';
+      ctx.lineWidth = 2.5;
       ctx.stroke();
 
-      // Header Bảng tên theo đúng số lượng 6 / 15 / 60 xe
+      // Header Bảng tên theo đúng số lượng thực tế
       ctx.fillStyle = '#06b6d4';
-      ctx.font = 'bold 17px monospace';
+      ctx.font = 'bold 18px monospace';
       ctx.textAlign = 'left';
-      ctx.fillText(`● STARTING GRID • DANH SÁCH ${totalRacerCount} TAY ĐUA XUẤT PHÁT`, cardX + 24, cardY + 36);
+      ctx.fillText(`● STARTING GRID • DANH SÁCH ${totalRacerCount} TAY ĐUA XUẤT PHÁT`, cardX + 24, cardY + 34);
 
       ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 23px sans-serif';
-      let titleHeader = `${totalRacerCount} TAY ĐUA TRANH TÀI CÙNG LÚC`;
-      if (totalRacerCount === 6) titleHeader = 'SPRINT RACE • 6 SIÊU XE DẪN ĐẦU';
-      else if (totalRacerCount === 15) titleHeader = 'GRAND PRIX • 15 TAY ĐUA QUỐC TẾ';
-      else if (totalRacerCount >= 50) titleHeader = 'SIÊU ĐẠI CHIẾN 60 TAY ĐUA HUYỀN THOẠI';
-      ctx.fillText(titleHeader, cardX + 24, cardY + 70);
+      ctx.font = 'bold 24px sans-serif';
+      ctx.fillText(`DANH SÁCH TAY ĐUA TRANH TÀI • ${totalRacerCount} SIÊU XE XUẤT PHÁT`, cardX + 24, cardY + 68);
 
       ctx.fillStyle = '#94a3b8';
       ctx.font = '14px monospace';
-      ctx.fillText(`LUỒNG ĐUA #${instance.id.toString().padStart(2, '0')} • ${totalRacerCount} XE ĐUA ĐỘC BẢN • SEED #${seed}`, cardX + 24, cardY + 95);
+      ctx.fillText(`LUỒNG ĐUA #${instance.id.toString().padStart(2, '0')} • CỰ LY HÀNG ĐÔI GRAND PRIX • SEED #${seed}`, cardX + 24, cardY + 93);
 
       // Đường kẻ phân cách
-      ctx.strokeStyle = 'rgba(6, 182, 212, 0.3)';
+      ctx.strokeStyle = 'rgba(6, 182, 212, 0.35)';
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.moveTo(cardX + 24, cardY + 110);
-      ctx.lineTo(cardX + cardW - 24, cardY + 110);
+      ctx.moveTo(cardX + 24, cardY + 105);
+      ctx.lineTo(cardX + cardW - 24, cardY + 105);
       ctx.stroke();
 
-      // Lấy danh sách tay đua THỰC TẾ từ instance.cars
-      const startY = cardY + 122;
+      // Vẽ danh sách tay đua (2 cột song song hoặc 1 cột nếu <= 6 xe)
+      const startY = cardY + 115;
+      const colGap = 16;
+      const colW = isTwoCol ? Math.floor((cardW - 32 - colGap) / 2) : (cardW - 32);
+      const col1X = cardX + 16;
+      const col2X = cardX + 16 + colW + colGap;
 
-      for (let i = 0; i < displayCount; i++) {
+      for (let i = 0; i < totalRacerCount; i++) {
         const car = actualCars[i];
-        const y = startY + i * rowH;
+        const col = isTwoCol ? (i < colRows ? 0 : 1) : 0;
+        const row = isTwoCol ? (i < colRows ? i : (i - colRows)) : i;
+        const x = col === 0 ? col1X : col2X;
+        const y = startY + row * rowH;
+        const h = rowH - 6;
+
         const driver = (car && car.state.driverName) ? car.state.driverName : `Tay Đua #${i + 1}`;
         const carDisplayName = (car && car.state.name) ? car.state.name : `Supercar GT #${i + 1}`;
         const colorHex = car && car.state.hexColor !== undefined 
@@ -406,74 +410,68 @@ export class VideoRecorderService {
         const carType = car ? car.state.type : 'formula';
 
         // Row background
-        ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
         ctx.beginPath();
         if ((ctx as any).roundRect) {
-          (ctx as any).roundRect(cardX + 16, y, cardW - 32, 68, 8);
+          (ctx as any).roundRect(x, y, colW, h, 6);
         } else {
-          ctx.rect(cardX + 16, y, cardW - 32, 68);
+          ctx.rect(x, y, colW, h);
         }
         ctx.fill();
 
-        ctx.strokeStyle = 'rgba(51, 65, 85, 0.4)';
+        ctx.strokeStyle = 'rgba(51, 65, 85, 0.5)';
         ctx.lineWidth = 1;
         ctx.stroke();
 
         // Position Badge (P1, P2, P3...)
-        ctx.fillStyle = i === 0 ? 'rgba(234, 179, 8, 0.25)' : i === 1 ? 'rgba(148, 163, 184, 0.25)' : i === 2 ? 'rgba(217, 119, 6, 0.25)' : 'rgba(6, 182, 212, 0.15)';
-        ctx.fillRect(cardX + 24, y + 12, 42, 44);
+        const badgeW = 38;
+        const badgeH = h - 10;
+        const badgeX = x + 6;
+        const badgeY = y + 5;
+
+        ctx.fillStyle = i === 0 ? 'rgba(234, 179, 8, 0.3)' : i === 1 ? 'rgba(148, 163, 184, 0.3)' : i === 2 ? 'rgba(217, 119, 6, 0.3)' : 'rgba(6, 182, 212, 0.18)';
+        ctx.fillRect(badgeX, badgeY, badgeW, badgeH);
         ctx.strokeStyle = i === 0 ? '#eab308' : i === 1 ? '#94a3b8' : i === 2 ? '#d97706' : 'rgba(6, 182, 212, 0.4)';
-        ctx.strokeRect(cardX + 24, y + 12, 42, 44);
+        ctx.strokeRect(badgeX, badgeY, badgeW, badgeH);
 
         ctx.fillStyle = i === 0 ? '#fde047' : i === 1 ? '#f1f5f9' : i === 2 ? '#fbbf24' : '#06b6d4';
-        ctx.font = 'bold 20px monospace';
+        ctx.font = 'bold 15px monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(`P${i + 1}`, cardX + 45, y + 34);
+        ctx.fillText(`P${i + 1}`, badgeX + badgeW / 2, badgeY + badgeH / 2);
 
         // Color Pill
         ctx.fillStyle = colorHex;
-        ctx.fillRect(cardX + 76, y + 12, 7, 44);
+        ctx.fillRect(x + badgeW + 12, y + 6, 4, h - 12);
 
         // Driver Name
         ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 19px sans-serif';
+        ctx.font = 'bold 15px sans-serif';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'top';
-        ctx.fillText(driver.toUpperCase(), cardX + 94, y + 13);
+        ctx.fillText(driver.toUpperCase(), x + badgeW + 22, y + 7);
 
         // Car Subtitle
         ctx.fillStyle = '#94a3b8';
-        ctx.font = '14px monospace';
-        ctx.fillText(carDisplayName.toUpperCase(), cardX + 94, y + 38);
+        ctx.font = '11px monospace';
+        ctx.fillText(carDisplayName.toUpperCase(), x + badgeW + 22, y + 27);
 
-        // Category Badge
+        // Category Badge on the right
+        const catW = 46;
+        const catH = 22;
+        const catX = x + colW - catW - 8;
+        const catY = y + Math.floor((h - catH) / 2);
+
         ctx.fillStyle = 'rgba(6, 182, 212, 0.2)';
-        ctx.fillRect(cardX + cardW - 96, y + 19, 64, 28);
-        ctx.strokeStyle = 'rgba(6, 182, 212, 0.4)';
-        ctx.strokeRect(cardX + cardW - 96, y + 19, 64, 28);
+        ctx.fillRect(catX, catY, catW, catH);
+        ctx.strokeStyle = 'rgba(6, 182, 212, 0.45)';
+        ctx.strokeRect(catX, catY, catW, catH);
 
         ctx.fillStyle = '#38bdf8';
-        ctx.font = 'bold 12px monospace';
+        ctx.font = 'bold 11px monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(carType === 'hypercar' ? 'HYPER' : 'F1', cardX + cardW - 64, y + 33);
-      }
-
-      // Thông báo các tay đua phía sau nếu cuộc đua có 15 hoặc 60 xe
-      if (hasMoreRacers) {
-        const footY = startY + displayCount * rowH + 6;
-        ctx.fillStyle = 'rgba(6, 182, 212, 0.15)';
-        ctx.fillRect(cardX + 16, footY, cardW - 32, 34);
-        ctx.strokeStyle = 'rgba(6, 182, 212, 0.35)';
-        ctx.strokeRect(cardX + 16, footY, cardW - 32, 34);
-
-        ctx.fillStyle = '#38bdf8';
-        ctx.font = 'bold 13px monospace';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        const remaining = totalRacerCount - displayCount;
-        ctx.fillText(`⚡ CÒN ${remaining} TAY ĐUA NỔ MÁY NỐI ĐUÔI PHÍA SAU (P7 - P${totalRacerCount})`, cardX + cardW / 2, footY + 17);
+        ctx.fillText(carType === 'hypercar' ? 'HYPER' : 'F1', catX + catW / 2, catY + catH / 2);
       }
 
       ctx.restore();
@@ -496,72 +494,201 @@ export class VideoRecorderService {
 
     ctx.save();
 
-    // BANNER PHÍA TRÊN
-    ctx.fillStyle = '#06b6d4';
-    ctx.font = 'bold 30px monospace';
-    ctx.fillText(`LUỒNG ĐUA #${instance.id.toString().padStart(2, '0')} • 1080x1920 (9:16 FULL HD 60 FPS)`, 40, 60);
-
+    // BANNER PHÍA TRÊN (Đã xóa dòng LUỒNG ĐUA #... theo yêu cầu)
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 24px sans-serif';
-    ctx.fillText(`TAY ĐUA: ${driverName}`, 40, 96);
+    ctx.font = 'bold 28px sans-serif';
+    ctx.fillText(`TAY ĐUA: ${driverName}`, 40, 68);
 
     ctx.fillStyle = '#38bdf8';
     ctx.font = '20px monospace';
-    ctx.fillText(`Xe: ${carName} • ${carCount} Xe Tranh Tài`, 40, 126);
+    ctx.fillText(`Xe: ${carName} • ${carCount} Xe Tranh Tài`, 40, 102);
 
     ctx.fillStyle = '#94a3b8';
     ctx.font = '18px sans-serif';
-    ctx.fillText(`Bản đồ: ${biomeName} • ${roadLayout}`, 40, 154);
+    ctx.fillText(`Bản đồ: ${biomeName} • ${roadLayout}`, 40, 132);
 
     ctx.fillStyle = '#10b981';
     ctx.font = 'bold 18px monospace';
-    ctx.fillText(`THỜI LƯỢNG: ${totalTimeStr} (CHUẨN ${Math.round(totalSecs)} GIÂY) • SEED: #${seed}`, 40, 182);
+    ctx.fillText(`THỜI LƯỢNG: ${totalTimeStr} (CHUẨN ${Math.round(totalSecs)} GIÂY) • SEED: #${seed}`, 40, 160);
 
-    // HUD TỐC ĐỘ PHÍA DƯỚI
-    const barW = 1000;
-    const barH = 14;
-    const barX = 40;
-    const barY = 1670;
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
-    ctx.fillRect(barX, barY, barW, barH);
+    // =========================================================================
+    // ĐỒNG HỒ TỐC ĐỘ KM/H THỂ THAO ĐIỆN TỬ (SPEEDOMETER DIAL GAUGE)
+    // Thay thế hoàn toàn thanh gạch ngang màu xanh cũ bằng 1 chiếc đồng hồ tốc độ chuẩn F1
+    // =========================================================================
+    const gaugeX = 890;
+    const gaugeY = 1775;
+    const gaugeR = 95;
+    const startAngle = 0.75 * Math.PI; // 135 độ
+    const totalSweep = 1.5 * Math.PI;   // 270 độ hành trình
+    const maxSpeed = 650;
+    const speedRatio = Math.min(1.0, Math.max(0.0, speed / maxSpeed));
+    const gear = Math.min(8, Math.max(1, Math.floor((speed / 500) * 8) + 1));
 
-    const rpmRatio = Math.min(1.0, Math.max(0.2, (rpm - 3000) / 7500));
-    const fillW = barW * rpmRatio;
-    const rpmGrad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
-    rpmGrad.addColorStop(0, '#10b981');
-    rpmGrad.addColorStop(0.65, '#f59e0b');
-    rpmGrad.addColorStop(1, '#ef4444');
-    ctx.fillStyle = rpmGrad;
-    ctx.fillRect(barX, barY, fillW, barH);
+    // 1. Mặt đồng hồ tròn nền kính đen ánh xanh kim loại sâu thẳm
+    ctx.save();
+    ctx.shadowColor = 'rgba(6, 182, 212, 0.45)';
+    ctx.shadowBlur = 18;
+    ctx.beginPath();
+    ctx.arc(gaugeX, gaugeY, gaugeR, 0, Math.PI * 2);
+    const dialGrad = ctx.createRadialGradient(gaugeX, gaugeY, 10, gaugeX, gaugeY, gaugeR);
+    dialGrad.addColorStop(0, 'rgba(15, 23, 42, 0.96)');
+    dialGrad.addColorStop(0.85, 'rgba(7, 11, 22, 0.98)');
+    dialGrad.addColorStop(1, 'rgba(30, 41, 59, 0.9)');
+    ctx.fillStyle = dialGrad;
+    ctx.fill();
 
-    // Đồng hồ tốc độ lớn
+    // Viền kim loại mạ chrome & LED Neon mảnh
+    ctx.shadowBlur = 0;
+    ctx.lineWidth = 3.5;
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.5)';
+    ctx.stroke();
+
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = '#06b6d4';
+    ctx.beginPath();
+    ctx.arc(gaugeX, gaugeY, gaugeR - 4, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // 2. Vòng ray nền cung tốc độ (Background Track)
+    const arcRadius = gaugeR - 18;
+    ctx.lineWidth = 11;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+    ctx.beginPath();
+    ctx.arc(gaugeX, gaugeY, arcRadius, startAngle, startAngle + totalSweep);
+    ctx.stroke();
+
+    // 3. Cung tốc độ phát sáng động (Active Speed Arc)
+    if (speedRatio > 0.02) {
+      const activeEndAngle = startAngle + speedRatio * totalSweep;
+      const speedArcGrad = ctx.createLinearGradient(gaugeX - arcRadius, gaugeY + arcRadius, gaugeX + arcRadius, gaugeY - arcRadius);
+      speedArcGrad.addColorStop(0, '#10b981');
+      speedArcGrad.addColorStop(0.5, '#f59e0b');
+      speedArcGrad.addColorStop(1, '#ef4444');
+
+      ctx.save();
+      ctx.shadowColor = speed > 480 ? '#ef4444' : '#10b981';
+      ctx.shadowBlur = 14;
+      ctx.lineWidth = 11;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = speedArcGrad;
+      ctx.beginPath();
+      ctx.arc(gaugeX, gaugeY, arcRadius, startAngle, activeEndAngle);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // 4. Vạch chia độ (Tick marks & số tốc độ mốc)
+    const tickSteps = [0, 100, 200, 300, 400, 500, 600];
+    for (const tickVal of tickSteps) {
+      const tickAngle = startAngle + (tickVal / maxSpeed) * totalSweep;
+      const cosA = Math.cos(tickAngle);
+      const sinA = Math.sin(tickAngle);
+
+      // Vạch kim loại
+      const rOuter = arcRadius - 9;
+      const rInner = arcRadius - 18;
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = tickVal <= speed ? '#f8fafc' : 'rgba(148, 163, 184, 0.45)';
+      ctx.beginPath();
+      ctx.moveTo(gaugeX + cosA * rInner, gaugeY + sinA * rInner);
+      ctx.lineTo(gaugeX + cosA * rOuter, gaugeY + sinA * rOuter);
+      ctx.stroke();
+
+      // Số mốc tốc độ nhỏ tinh tế (0, 300, 600)
+      if (tickVal === 0 || tickVal === 300 || tickVal === 600) {
+        const rText = arcRadius - 28;
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = 'bold 10px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(tickVal.toString(), gaugeX + cosA * rText, gaugeY + sinA * rText);
+      }
+    }
+
+    // 5. Kim đồng hồ thể thao nhọn sắc sảo (Dynamic Speed Needle)
+    const needleAngle = startAngle + speedRatio * totalSweep;
+    const needleLen = arcRadius - 5;
+    const needleTipX = gaugeX + Math.cos(needleAngle) * needleLen;
+    const needleTipY = gaugeY + Math.sin(needleAngle) * needleLen;
+
+    ctx.save();
+    ctx.shadowColor = '#ef4444';
+    ctx.shadowBlur = 10;
+    ctx.lineWidth = 3.5;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#ef4444';
+    ctx.beginPath();
+    ctx.moveTo(gaugeX, gaugeY);
+    ctx.lineTo(needleTipX, needleTipY);
+    ctx.stroke();
+    ctx.restore();
+
+    // 6. Trục quay tâm kim loại titan
+    ctx.beginPath();
+    ctx.arc(gaugeX, gaugeY, 11, 0, Math.PI * 2);
+    ctx.fillStyle = '#1e293b';
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#94a3b8';
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(gaugeX, gaugeY, 4, 0, Math.PI * 2);
+    ctx.fillStyle = '#ef4444';
+    ctx.fill();
+
+    // 7. Màn hình số điện tử sắc nét ở nửa dưới đồng hồ
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '900 32px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`${speed}`, gaugeX, gaugeY + 36);
+
+    ctx.fillStyle = '#06b6d4';
+    ctx.font = 'bold 13px monospace';
+    ctx.fillText('KM/H', gaugeX, gaugeY + 54);
+
+    // Cấp số ở nửa trên đồng hồ
     ctx.fillStyle = '#f59e0b';
-    ctx.font = '900 84px sans-serif';
-    ctx.fillText(`${speed}`, 40, 1775);
+    ctx.font = 'bold 13px monospace';
+    ctx.fillText(`SỐ ${gear}`, gaugeX, gaugeY - 42);
+
+    ctx.restore();
+
+    // =========================================================================
+    // CỤM THÔNG SỐ TRUYỀN HÌNH BÊN TRÁI ĐỒNG HỒ TỐC ĐỘ (X: 40 -> 760)
+    // =========================================================================
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+
+    // Số km/h lớn, đậm
+    ctx.fillStyle = '#f59e0b';
+    ctx.font = '900 78px sans-serif';
+    ctx.fillText(`${speed}`, 40, 1755);
 
     ctx.fillStyle = '#f59e0b';
     ctx.font = 'bold 24px monospace';
-    ctx.fillText('KM/H', 220, 1755);
+    ctx.fillText('KM/H', 215, 1735);
 
-    const gear = Math.min(8, Math.max(1, Math.floor((speed / 500) * 8) + 1));
     ctx.fillStyle = '#38bdf8';
     ctx.font = 'bold 26px monospace';
-    ctx.fillText(`SỐ ${gear} • RPM ${rpm}`, 320, 1755);
+    ctx.fillText(`SỐ ${gear} • RPM ${rpm}`, 310, 1735);
 
     // Hạng & Vòng
     const currentLap = Math.min(3, Math.floor((elapsedSecs / Math.max(1, totalSecs)) * 3) + 1);
     ctx.fillStyle = '#38bdf8';
-    ctx.font = 'bold 28px monospace';
-    ctx.fillText(`HẠNG: P1 / ${carCount} • VÒNG: ${currentLap}/3`, 40, 1820);
+    ctx.font = 'bold 26px monospace';
+    ctx.fillText(`HẠNG: P1 / ${carCount} • VÒNG: ${currentLap}/3`, 40, 1805);
 
     // Đồng hồ đếm thời gian thực tế chuẩn xác
     ctx.fillStyle = '#cbd5e1';
     ctx.font = '22px monospace';
-    ctx.fillText(`THỜI GIAN: ${curTimeStr} / ${totalTimeStr} • ĐÃ ĐUA: ${distKm} / 35.0 KM`, 40, 1855);
+    ctx.fillText(`THỜI GIAN: ${curTimeStr} / ${totalTimeStr} • ĐÃ ĐUA: ${distKm} / 35.0 KM`, 40, 1845);
 
     ctx.fillStyle = '#fde047';
     ctx.font = 'bold 20px sans-serif';
-    ctx.fillText('⚡ KÍCH HOẠT NITRO BOOST +60 KM/H • VƯỢT XE AN TOÀN', 40, 1890);
+    ctx.fillText('⚡ KÍCH HOẠT NITRO BOOST +60 KM/H • VƯỢT XE AN TOÀN', 40, 1885);
 
     // 🎙️ Phụ đề bình luận viên truyền hình song ngữ (Tiếng Việt / English)
     try {
@@ -950,7 +1077,7 @@ export class VideoRecorderService {
 
     // Tạo một instance mô phỏng ngoại tuyến độc lập để không can thiệp vào cuộc đua đang chạy trên màn hình
     const simSeed = existingJob?.seed || instance.seedData?.seed || 632585;
-    const simCars = instance.desiredCarCount || 15;
+    const simCars = (instance.cars && instance.cars.length > 0) ? instance.cars.length : (instance.desiredCarCount || 15);
     let offlineInstance: RacingInstance;
     try {
       offlineInstance = new RacingInstance(instance.id, effectiveDuration, simSeed, simCars);
@@ -959,6 +1086,21 @@ export class VideoRecorderService {
       }
       if (instance.seedData?.biome?.roadLayoutType) {
         offlineInstance.setRoadLayout(instance.seedData.biome.roadLayoutType);
+      }
+      // Đồng bộ chuẩn xác 100% không thiếu 1 xe nào và giữ nguyên toàn bộ danh tính tay đua, loại xe, màu xe từ game trực tiếp
+      if (instance.cars && instance.cars.length > 0) {
+        const syncCount = Math.min(instance.cars.length, offlineInstance.cars.length);
+        for (let cIdx = 0; cIdx < syncCount; cIdx++) {
+          const liveCar = instance.cars[cIdx];
+          const offCar = offlineInstance.cars[cIdx];
+          offCar.state.id = liveCar.state.id;
+          offCar.state.name = liveCar.state.name;
+          offCar.state.driverName = liveCar.state.driverName;
+          offCar.state.type = liveCar.state.type;
+          offCar.state.color = liveCar.state.color;
+          offCar.state.hexColor = liveCar.state.hexColor;
+          offCar.state.rank = liveCar.state.rank;
+        }
       }
     } catch {
       offlineInstance = instance;
@@ -1003,12 +1145,49 @@ export class VideoRecorderService {
         const initialized = await session.initialize(preferredFormat);
 
         if (initialized) {
+          const telemetrySnapshots: InstanceTelemetrySnapshot[] = [];
+
           for (let f = 0; f < renderFrames; f++) {
             // Cập nhật vật lý xe đua với delta đồng bộ chuẩn 60 FPS (0.01667s)
-            offlineInstance.update(fixedDelta, config.aiAggressionGlobal || 0.85, true);
+            const { activeOvertakeCarId, collisionCarId, collisionCarPos, collisionIntensity } = offlineInstance.update(
+              fixedDelta,
+              config.aiAggressionGlobal || 0.85,
+              true
+            );
 
             // Render 3D trực tiếp 1080x1920 bằng sessionRenderer riêng biệt
             const cam = offlineInstance.cameraDirector.camera;
+            const camDir = new THREE.Vector3();
+            cam.getWorldDirection(camDir);
+            const primaryCar = offlineInstance.cars.find(c => c.state.rank === 1) || offlineInstance.cars[0];
+
+            telemetrySnapshots.push({
+              timeSec: f * fixedDelta,
+              cameraMode: offlineInstance.cameraDirector.currentMode,
+              cameraPos: cam.position.clone(),
+              cameraDir: camDir.clone(),
+              cameraSpeed: primaryCar?.state?.speed || 420,
+              activeOvertakeCarId,
+              collisionCarId,
+              collisionPos: collisionCarPos ? collisionCarPos.clone() : null,
+              collisionIntensity,
+              cars: offlineInstance.cars.map(c => ({
+                id: c.state.id,
+                name: c.state.name,
+                driverName: c.state.driverName,
+                type: c.state.type,
+                position: c.group.position.clone(),
+                speedKmh: c.state.speed || 120,
+                rpm: c.state.rpm || (1400 + (c.state.speed / 550) * 7800),
+                throttle: c.state.isHyperBoosting ? 1.0 : (c.state.throttle || 0.88),
+                gear: c.state.gear,
+                hasShiftPop: Boolean(c.state.hasShiftPop),
+                isDrifting: Boolean(c.state.isDrifting),
+                isNitro: Boolean(c.state.isHyperBoosting),
+                isBraking: Boolean(c.state.isBraking)
+              }))
+            });
+
             const oldAspect = cam.aspect;
             cam.aspect = 1080 / 1920;
             cam.updateProjectionMatrix();
@@ -1049,7 +1228,8 @@ export class VideoRecorderService {
             simSeed,
             instance.seedData?.biome,
             instance.seedData?.weather,
-            instance.cars?.length || 15
+            instance.cars?.length || 15,
+            telemetrySnapshots
           );
           if (finalizeRes && finalizeRes.blob) {
             finalBlob = finalizeRes.blob;
@@ -1064,9 +1244,46 @@ export class VideoRecorderService {
           const webmSession = new WebCodecsVideoEncoderSession(1080, 1920, fps, 20_000_000);
           const webmInit = await webmSession.initialize('webm');
           if (webmInit) {
+            const webmTelemetry: InstanceTelemetrySnapshot[] = [];
+
             for (let f = 0; f < renderFrames; f++) {
-              offlineInstance.update(fixedDelta, config.aiAggressionGlobal || 0.85, true);
+              const { activeOvertakeCarId, collisionCarId, collisionCarPos, collisionIntensity } = offlineInstance.update(
+                fixedDelta,
+                config.aiAggressionGlobal || 0.85,
+                true
+              );
               const cam = offlineInstance.cameraDirector.camera;
+              const camDir = new THREE.Vector3();
+              cam.getWorldDirection(camDir);
+              const primaryCar = offlineInstance.cars.find(c => c.state.rank === 1) || offlineInstance.cars[0];
+
+              webmTelemetry.push({
+                timeSec: f * fixedDelta,
+                cameraMode: offlineInstance.cameraDirector.currentMode,
+                cameraPos: cam.position.clone(),
+                cameraDir: camDir.clone(),
+                cameraSpeed: primaryCar?.state?.speed || 420,
+                activeOvertakeCarId,
+                collisionCarId,
+                collisionPos: collisionCarPos ? collisionCarPos.clone() : null,
+                collisionIntensity,
+                cars: offlineInstance.cars.map(c => ({
+                  id: c.state.id,
+                  name: c.state.name,
+                  driverName: c.state.driverName,
+                  type: c.state.type,
+                  position: c.group.position.clone(),
+                  speedKmh: c.state.speed || 120,
+                  rpm: c.state.rpm || (1400 + (c.state.speed / 550) * 7800),
+                  throttle: c.state.isHyperBoosting ? 1.0 : (c.state.throttle || 0.88),
+                  gear: c.state.gear,
+                  hasShiftPop: Boolean(c.state.hasShiftPop),
+                  isDrifting: Boolean(c.state.isDrifting),
+                  isNitro: Boolean(c.state.isHyperBoosting),
+                  isBraking: Boolean(c.state.isBraking)
+                }))
+              });
+
               const oldAspect = cam.aspect;
               cam.aspect = 1080 / 1920;
               cam.updateProjectionMatrix();
@@ -1096,7 +1313,8 @@ export class VideoRecorderService {
               simSeed,
               instance.seedData?.biome,
               instance.seedData?.weather,
-              instance.cars?.length || 15
+              instance.cars?.length || 15,
+              webmTelemetry
             );
             if (finalizeRes && finalizeRes.blob) {
               finalBlob = finalizeRes.blob;

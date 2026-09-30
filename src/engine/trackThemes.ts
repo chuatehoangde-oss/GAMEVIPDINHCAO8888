@@ -142,3 +142,65 @@ export function createRoadTexture(theme: TrackVisualTheme): THREE.CanvasTexture 
   return texture;
 }
 
+/**
+ * 30 MÀU SẮC RỰC RỠ, ĐỘC ĐÁO CHO CON ĐƯỜNG ĐUA (30 Distinct Vibrant Road Colors)
+ * Loại bỏ hoàn toàn màu đen tối đơn điệu, con đường trải dài qua 30 phân đoạn màu sắc sống động,
+ * bắt mắt, tràn ngập năng lượng và phong cách thể thao tương lai.
+ */
+export const TRACK_30_COLORS: { name: string; hex: number }[] = [
+  { name: 'Cyber Cyan Neon', hex: 0x06b6d4 },
+  { name: 'Emerald Racing Green', hex: 0x10b981 },
+  { name: 'Ferrari Crimson Red', hex: 0xef4444 },
+  { name: 'Electric Ultraviolet', hex: 0xa855f7 },
+  { name: 'Solar Amber Gold', hex: 0xf59e0b },
+  { name: 'Deep Sapphire Cobalt', hex: 0x3b82f6 },
+  { name: 'Sunset Magma Orange', hex: 0xf97316 },
+  { name: 'Hot Cyber Pink', hex: 0xec4899 },
+  { name: 'Poison Lime Acid', hex: 0x84cc16 },
+  { name: 'Deep Marine Turquoise', hex: 0x14b8a6 },
+  { name: 'Royal Indigo Blue', hex: 0x6366f1 },
+  { name: 'Titanium Rose Coral', hex: 0xf43f5e },
+  { name: 'Sky Glacier Ice Blue', hex: 0x38bdf8 },
+  { name: 'Ruby Velvet Crimson', hex: 0xe11d48 },
+  { name: 'Forest Jade Green', hex: 0x059669 },
+  { name: 'Electric Violet Neon', hex: 0x7c3aed },
+  { name: 'Tangerine Sun Gold', hex: 0xd97706 },
+  { name: 'Oceanic Horizon Blue', hex: 0x0284c7 },
+  { name: 'Cyber Teal Glow', hex: 0x0d9488 },
+  { name: 'Blaze Speed Red', hex: 0xdc2626 },
+  { name: 'Laser Lemon Yellow', hex: 0xeab308 },
+  { name: 'Orchid Dream Lavender', hex: 0xc084fc },
+  { name: 'Vivid Caribbean Azure', hex: 0x0ea5e9 },
+  { name: 'Spring Meadow Green', hex: 0x22c55e },
+  { name: 'Sunset Coral Peach', hex: 0xfb923c },
+  { name: 'Deep Fuchsia Shock', hex: 0xd946ef },
+  { name: 'Aurora Mint Green', hex: 0x4ade80 },
+  { name: 'Hyper Electric Blue', hex: 0x2563eb },
+  { name: 'Solar Flare Gold', hex: 0xea580c },
+  { name: 'Cosmic Nebula Purple', hex: 0x8b5cf6 },
+];
+
+export function getTrack30ColorAtProgress(progress: number): THREE.Color {
+  const normP = ((progress % 1.0) + 1.0) % 1.0;
+  const pFloat = normP * 30;
+  const idx1 = Math.floor(pFloat) % 30;
+  const idx2 = (idx1 + 1) % 30;
+  const frac = pFloat - Math.floor(pFloat);
+  
+  // Dành 70% chiều dài phân đoạn cho màu thuần khiết, 30% cuối chuyển sắc (Smoothstep gradient) mượt mà sang màu kế tiếp
+  const blend = THREE.MathUtils.smoothstep(frac, 0.70, 1.0);
+  const c1 = new THREE.Color(TRACK_30_COLORS[idx1].hex);
+  const c2 = new THREE.Color(TRACK_30_COLORS[idx2].hex);
+  return c1.lerp(c2, blend);
+}
+
+/**
+ * Lấy 1 màu độc nhất trong 30 màu sắc cho từng con đường / từng luồng chạy
+ * Mỗi luồng chạy là 1 màu riêng biệt rực rỡ, toàn bộ con đường mang 1 màu đồng nhất sáng đẹp
+ */
+export function getTrackColorForInstance(instanceId: number = 1, seed: number = 0): { name: string; hex: number } {
+  const idOffset = Math.max(0, instanceId - 1);
+  const colorIndex = (idOffset + Math.abs(seed)) % TRACK_30_COLORS.length;
+  return TRACK_30_COLORS[colorIndex];
+}
+

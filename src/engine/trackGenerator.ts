@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { TrackBiome } from '../types';
 import { safeGetPointAt, safeGetTangentAt } from './curveUtils';
 import { generatePointsForLayout } from './trackLayouts';
+import { getTrackColorForInstance, TRACK_30_COLORS } from './trackThemes';
 
 export interface GeneratedTrack {
   curve: THREE.CatmullRomCurve3;
@@ -30,15 +31,15 @@ function createAsphaltTexture(textureType: string, baseColorHex: number): THREE.
   ctx.fillRect(0, 0, 512, 512);
 
   // 1. Lớp vệt bám cao su lốp xe ôm cua (Racing Groove Rubber Lines)
-  // Hai dải bánh xe trái và phải có màu sẫm hơn đặc trưng của đường đua F1
+  // Độ sẫm nhẹ vừa vặn, giữ trọn độ sáng và rực rỡ của 30 dải màu sắc trên con đường
   const rubberGradient = ctx.createLinearGradient(0, 0, 512, 0);
-  rubberGradient.addColorStop(0.0, 'rgba(0, 0, 0, 0.08)');
-  rubberGradient.addColorStop(0.18, 'rgba(0, 0, 0, 0.42)'); // Vệt lốp xe trái
-  rubberGradient.addColorStop(0.32, 'rgba(0, 0, 0, 0.08)');
-  rubberGradient.addColorStop(0.50, 'rgba(255, 255, 255, 0.04)'); // Tim đường
-  rubberGradient.addColorStop(0.68, 'rgba(0, 0, 0, 0.42)'); // Vệt lốp xe phải
-  rubberGradient.addColorStop(0.82, 'rgba(0, 0, 0, 0.08)');
-  rubberGradient.addColorStop(1.0, 'rgba(0, 0, 0, 0.12)');
+  rubberGradient.addColorStop(0.0, 'rgba(0, 0, 0, 0.02)');
+  rubberGradient.addColorStop(0.18, 'rgba(0, 0, 0, 0.16)'); // Vệt lốp xe trái
+  rubberGradient.addColorStop(0.32, 'rgba(0, 0, 0, 0.02)');
+  rubberGradient.addColorStop(0.50, 'rgba(255, 255, 255, 0.08)'); // Tim đường
+  rubberGradient.addColorStop(0.68, 'rgba(0, 0, 0, 0.16)'); // Vệt lốp xe phải
+  rubberGradient.addColorStop(0.82, 'rgba(0, 0, 0, 0.02)');
+  rubberGradient.addColorStop(1.0, 'rgba(0, 0, 0, 0.04)');
   ctx.fillStyle = rubberGradient;
   ctx.fillRect(0, 0, 512, 512);
 
@@ -99,8 +100,8 @@ function createAsphaltBumpTexture(): THREE.CanvasTexture {
 }
 
 /**
- * Tạo kết cấu cỏ/mặt đất mượt mà có sọc cỏ cắt chuyên nghiệp (Lawn Mower Stripes)
- * Loại bỏ hoàn toàn mảng xanh phẳng lì nhòe màu như tờ giấy
+ * Tạo kết cấu cỏ/mặt đất tự nhiên, mịn màng, màu sắc đồng nhất và có độ nhám hạt nhẹ
+ * Triệt tiêu 100% các vệt kẻ sọc lớn theo yêu cầu
  */
 function createGrassTerrainTexture(groundColorHex: number): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
@@ -113,23 +114,16 @@ function createGrassTerrainTexture(groundColorHex: number): THREE.CanvasTexture 
   const g = Math.round(baseCol.g * 255);
   const b = Math.round(baseCol.b * 255);
 
+  // Nền màu đồng nhất 100% không có bất kỳ vạch kẻ hay sọc nào
   ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
   ctx.fillRect(0, 0, 512, 512);
 
-  // Sọc máy cắt cỏ chuyên nghiệp của các đường đua lớn như Monza, Silverstone
-  const stripeWidth = 64;
-  for (let x = 0; x < 512; x += stripeWidth * 2) {
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.09)';
-    ctx.fillRect(x, 0, stripeWidth, 512);
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.09)';
-    ctx.fillRect(x + stripeWidth, 0, stripeWidth, 512);
-  }
-
-  // Kết cấu hạt đất và bụi cỏ tự nhiên
+  // Kết cấu hạt đất và bụi cỏ tự nhiên nhám mịn màng (Organic Soil & Grass Grain)
   const imgData = ctx.getImageData(0, 0, 512, 512);
   const data = imgData.data;
   for (let i = 0; i < data.length; i += 4) {
-    const noise = (Math.random() - 0.5) * 36;
+    // Độ nhám hạt nhẹ vi mô, phân bố ngẫu nhiên mềm mại
+    const noise = (Math.random() - 0.5) * 16;
     data[i] = Math.max(0, Math.min(255, data[i] + noise * 0.7));
     data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + noise));
     data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + noise * 0.7));
@@ -139,7 +133,7 @@ function createGrassTerrainTexture(groundColorHex: number): THREE.CanvasTexture 
   const texture = new THREE.CanvasTexture(canvas);
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(120, 120);
+  texture.repeat.set(240, 240); // Lặp hạt mịn vi mô siêu nhỏ, đồng nhất hoàn toàn trên mọi góc quay
   texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
 }
@@ -199,7 +193,7 @@ export class TrackGenerator {
    * Scaled 10x larger for long 32km - 42km high-speed racing circuits
    * Ensures cars never repeat any curve within 2 full minutes of racing!
    */
-  static generateTrack(seed: number, biome: TrackBiome): GeneratedTrack {
+  static generateTrack(seed: number, biome: TrackBiome, instanceId?: number): GeneratedTrack {
     const layout = biome.roadLayoutType || 'GRAND_PRIX_OVAL';
     // 100 Con Đường Đua Độc Nhất, quy mô dài gấp 10 lần (~32,000m - 42,000m)
     // Xe đua suốt 2 phút liên tục không lặp lại bất kỳ khúc cua cũ nào!
@@ -209,6 +203,10 @@ export class TrackGenerator {
     curve.arcLengthDivisions = 4000; // Siêu mịn mượt, triệt tiêu 100% rung giật vi chấn ở tốc độ cao
     const totalLength = curve.getLength();
 
+    // Mỗi con đường / mỗi luồng chạy nhận đúng 1 MÀU ĐỘC NHẤT trong 30 màu sắc rực rỡ
+    const chosenRoadTheme = getTrackColorForInstance(instanceId || 1, seed);
+    const roadCol = new THREE.Color(chosenRoadTheme.hex);
+
     // Generate Track Ribbon Geometry (width = 15 units, extra spacious for 15 racing cars!)
     const trackWidth = 15;
     const segments = 800; // 800 segments siêu mượt mà giảm 35% tải GPU per-instance
@@ -216,6 +214,7 @@ export class TrackGenerator {
     const positions: number[] = [];
     const normals: number[] = [];
     const uvs: number[] = [];
+    const trackColors: number[] = [];
     const indices: number[] = [];
 
     for (let i = 0; i <= segments; i++) {
@@ -234,8 +233,19 @@ export class TrackGenerator {
       const pLeft = point.clone().addScaledVector(normal, trackWidth / 2);
       const pRight = point.clone().addScaledVector(normal, -trackWidth / 2);
 
-      positions.push(pLeft.x, pLeft.y + 0.1, pLeft.z);
-      positions.push(pRight.x, pRight.y + 0.1, pRight.z);
+      if (i === segments && positions.length >= 6) {
+        // Enforce exact bit-level closure with vertex 0 and 1 so there is NEVER even a micro-gap or floating point tear:
+        positions.push(positions[0], positions[1], positions[2]);
+        positions.push(positions[3], positions[4], positions[5]);
+        trackColors.push(trackColors[0], trackColors[1], trackColors[2]);
+        trackColors.push(trackColors[3], trackColors[4], trackColors[5]);
+      } else {
+        positions.push(pLeft.x, pLeft.y + 0.1, pLeft.z);
+        positions.push(pRight.x, pRight.y + 0.1, pRight.z);
+        // Toàn bộ con đường mang 1 màu đồng nhất sáng rực rỡ độc bản
+        trackColors.push(roadCol.r, roadCol.g, roadCol.b);
+        trackColors.push(roadCol.r, roadCol.g, roadCol.b);
+      }
 
       normals.push(0, 1, 0);
       normals.push(0, 1, 0);
@@ -253,53 +263,24 @@ export class TrackGenerator {
     trackGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     trackGeo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
     trackGeo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    trackGeo.setAttribute('color', new THREE.Float32BufferAttribute(trackColors, 3));
     trackGeo.setIndex(indices);
 
-    // Calculate road surface physical properties based on biome.roadTextureType
-    let trackRoughness = 0.82;
-    let trackMetalness = 0.12;
-    let trackColor = biome.trackColor || 0x1d212a;
-
-    if (biome.roadTextureType === 'wet_reflection') {
-      trackRoughness = 0.20;
-      trackMetalness = 0.45;
-      trackColor = 0x0f172a;
-    } else if (biome.roadTextureType === 'red_f1') {
-      trackRoughness = 0.65;
-      trackMetalness = 0.18;
-      trackColor = 0x881337;
-    } else if (biome.roadTextureType === 'cyber_midnight') {
-      trackRoughness = 0.28;
-      trackMetalness = 0.52;
-      trackColor = 0x020617;
-    } else if (biome.roadTextureType === 'tarmac_grey') {
-      trackRoughness = 0.72;
-      trackMetalness = 0.08;
-      trackColor = 0x334155;
-    } else if (biome.roadTextureType === 'alpine_ice') {
-      trackRoughness = 0.25;
-      trackMetalness = 0.38;
-      trackColor = 0x475569;
-    } else if (biome.roadTextureType === 'desert_clay') {
-      trackRoughness = 0.90;
-      trackMetalness = 0.05;
-      trackColor = 0x78350f;
-    }
-
-    const asphaltTex = createAsphaltTexture(biome.roadTextureType || 'asphalt_dark', trackColor);
+    const asphaltTex = createAsphaltTexture(biome.roadTextureType || 'asphalt_dark', 0xffffff);
     const asphaltBumpTex = createAsphaltBumpTexture();
 
     const trackMat = new THREE.MeshStandardMaterial({
-      color: trackColor,
+      color: 0xffffff, // Đặt màu trắng để màu sắc vertexColors tỏa sáng 100% rực rỡ, không bị tối đen
+      vertexColors: true,
       map: asphaltTex,
       bumpMap: asphaltBumpTex,
-      bumpScale: 0.05,
-      roughness: trackRoughness,
-      metalness: trackMetalness,
+      bumpScale: 0.04,
+      roughness: 0.42, // Bề mặt bóng thể thao, bắt sáng phản quang lung linh
+      metalness: 0.22,
       side: THREE.DoubleSide,
       polygonOffset: true,
-      polygonOffsetFactor: 1,
-      polygonOffsetUnits: 1
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1
     });
 
     trackGeo.computeBoundingSphere();
@@ -315,6 +296,98 @@ export class TrackGenerator {
 
     const dummy = new THREE.Object3D();
     const up = new THREE.Vector3(0, 1, 0);
+
+    // =========================================================================
+    // VÁCH CHÂN ĐƯỜNG 3D NGUYÊN KHỐI (SOLID 3D EXTRUSION / ROAD EMBANKMENT SKIRT)
+    // Kéo dài thẳng từ 2 mép viền đường (y = trackY) xuống tận đáy đất (y = groundY = -4.0m)
+    // Con đường luôn lơ lửng cao hơn mặt đất, triệt tiêu 100% hiện tượng giao cắt hay trộn nền vào đường
+    // =========================================================================
+    const groundY = -4.0;
+    const skirtGeo = new THREE.BufferGeometry();
+    const skirtPos: number[] = [];
+    const skirtColors: number[] = [];
+    const skirtNormals: number[] = [];
+    const skirtUvs: number[] = [];
+    const skirtIndices: number[] = [];
+
+    // 1. Vách chân kè bên trái (Left embankment wall)
+    for (let i = 0; i <= segments; i++) {
+      const topX = positions[i * 6];
+      const topY = positions[i * 6 + 1];
+      const topZ = positions[i * 6 + 2];
+
+      const t = i / segments;
+      const tangent = safeGetTangentAt(curve, t);
+      const normal = new THREE.Vector3().crossVectors(tangent, up).normalize();
+
+      skirtPos.push(topX, topY, topZ);
+      skirtPos.push(topX, groundY, topZ);
+
+      // Đỉnh kè lấy màu đường rực rỡ, chân kè chuyển bóng êm ái
+      skirtColors.push(roadCol.r * 0.85, roadCol.g * 0.85, roadCol.b * 0.85);
+      skirtColors.push(roadCol.r * 0.35, roadCol.g * 0.35, roadCol.b * 0.35);
+
+      skirtNormals.push(normal.x, 0, normal.z);
+      skirtNormals.push(normal.x, 0, normal.z);
+
+      skirtUvs.push(t * 800, 1);
+      skirtUvs.push(t * 800, 0);
+
+      if (i < segments) {
+        const base = i * 2;
+        skirtIndices.push(base, base + 2, base + 1);
+        skirtIndices.push(base + 1, base + 2, base + 3);
+      }
+    }
+
+    // 2. Vách chân kè bên phải (Right embankment wall)
+    const rightOffset = (segments + 1) * 2;
+    for (let i = 0; i <= segments; i++) {
+      const topX = positions[i * 6 + 3];
+      const topY = positions[i * 6 + 4];
+      const topZ = positions[i * 6 + 5];
+
+      const t = i / segments;
+      const tangent = safeGetTangentAt(curve, t);
+      const normal = new THREE.Vector3().crossVectors(tangent, up).normalize();
+
+      skirtPos.push(topX, topY, topZ);
+      skirtPos.push(topX, groundY, topZ);
+
+      skirtColors.push(roadCol.r * 0.85, roadCol.g * 0.85, roadCol.b * 0.85);
+      skirtColors.push(roadCol.r * 0.35, roadCol.g * 0.35, roadCol.b * 0.35);
+
+      skirtNormals.push(-normal.x, 0, -normal.z);
+      skirtNormals.push(-normal.x, 0, -normal.z);
+
+      skirtUvs.push(t * 800, 1);
+      skirtUvs.push(t * 800, 0);
+
+      if (i < segments) {
+        const base = rightOffset + i * 2;
+        skirtIndices.push(base, base + 1, base + 2);
+        skirtIndices.push(base + 1, base + 3, base + 2);
+      }
+    }
+
+    skirtGeo.setAttribute('position', new THREE.Float32BufferAttribute(skirtPos, 3));
+    skirtGeo.setAttribute('normal', new THREE.Float32BufferAttribute(skirtNormals, 3));
+    skirtGeo.setAttribute('uv', new THREE.Float32BufferAttribute(skirtUvs, 2));
+    skirtGeo.setAttribute('color', new THREE.Float32BufferAttribute(skirtColors, 3));
+    skirtGeo.setIndex(skirtIndices);
+    skirtGeo.computeBoundingSphere();
+    skirtGeo.computeBoundingBox();
+
+    const skirtMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      roughness: 0.80,
+      metalness: 0.12,
+      side: THREE.DoubleSide
+    });
+    const skirtMesh = new THREE.Mesh(skirtGeo, skirtMat);
+    skirtMesh.receiveShadow = true;
+    sceneryGroup.add(skirtMesh);
 
     // =========================================================================
     // 1. VẠCH KẺ ĐƯỜNG BIÊN 2 BÊN (ROAD EDGE LINES) - ĐA DẠNG MÀU SẮC & PHẢN QUANG
@@ -614,8 +687,19 @@ export class TrackGenerator {
     rightCapsMesh.instanceMatrix.needsUpdate = true;
     sceneryGroup.add(leftBollardsMesh, rightBollardsMesh, leftCapsMesh, rightCapsMesh);
 
-    // VỊ TRÍ HOÁ CỘT ĐÈN ĐƯỜNG CAO
+    // VỊ TRÍ HOÁ CỘT ĐÈN ĐƯỜNG CAO (Bỏ qua vị trí p = 0 và p = tallPoleCount - 1 để không trùng lấn với Cổng xuất phát)
     for (let p = 0; p < tallPoleCount; p++) {
+      if (p === 0 || p === tallPoleCount - 1) {
+        dummy.position.set(0, -9999, 0);
+        dummy.scale.set(0, 0, 0);
+        dummy.updateMatrix();
+        leftTallPolesMesh.setMatrixAt(p, dummy.matrix);
+        leftTallLampsMesh.setMatrixAt(p, dummy.matrix);
+        rightTallPolesMesh.setMatrixAt(p, dummy.matrix);
+        rightTallLampsMesh.setMatrixAt(p, dummy.matrix);
+        continue;
+      }
+
       const t = p / tallPoleCount;
       const point = safeGetPointAt(curve, t);
       const tangent = safeGetTangentAt(curve, t);
@@ -624,8 +708,8 @@ export class TrackGenerator {
       const angleY = Math.atan2(tangent.x, tangent.z);
       dummy.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), angleY);
 
-      // Cột đèn cao lề trái
-      const pLeft = point.clone().addScaledVector(normal, trackWidth / 2 + 3.8);
+      // Cột đèn cao lề trái (Đặt lùi ra ngoài lề đường an toàn 4.2m)
+      const pLeft = point.clone().addScaledVector(normal, trackWidth / 2 + 4.2);
       dummy.position.set(pLeft.x, pLeft.y + tallPoleHeight / 2, pLeft.z);
       dummy.scale.set(1, 1, 1);
       dummy.updateMatrix();
@@ -636,7 +720,7 @@ export class TrackGenerator {
       leftTallLampsMesh.setMatrixAt(p, dummy.matrix);
 
       // Cột đèn cao lề phải
-      const pRight = point.clone().addScaledVector(normal, -trackWidth / 2 - 3.8);
+      const pRight = point.clone().addScaledVector(normal, -trackWidth / 2 - 4.2);
       dummy.position.set(pRight.x, pRight.y + tallPoleHeight / 2, pRight.z);
       dummy.updateMatrix();
       rightTallPolesMesh.setMatrixAt(p, dummy.matrix);
@@ -812,47 +896,7 @@ export class TrackGenerator {
         ceilingNeonOddMesh.setMatrixAt(oddIdx++, _neonMat4);
       }
 
-      // Cổng chào ĐẦU HẦM TỐC ĐỘ CAO (Entrance Portal)
-      if (r === 0) {
-        const portalPillarGeo = new THREE.BoxGeometry(1.6, 12, 1.6);
-        const pL = new THREE.Mesh(portalPillarGeo, archMatDark);
-        pL.position.copy(ringPos).addScaledVector(ringNorm, trackWidth / 2 + 2.5);
-        pL.position.y += 6;
-
-        const pR = new THREE.Mesh(portalPillarGeo, archMatDark);
-        pR.position.copy(ringPos).addScaledVector(ringNorm, -trackWidth / 2 - 2.5);
-        pR.position.y += 6;
-
-        const bannerGeo = new THREE.PlaneGeometry(trackWidth + 3, 2.2);
-        const bannerMat = new THREE.MeshBasicMaterial({ color: 0x00f0ff, side: THREE.DoubleSide });
-        const portalSign = new THREE.Mesh(bannerGeo, bannerMat);
-        portalSign.position.copy(ringPos);
-        portalSign.position.y += 11.5;
-        portalSign.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), ringTan);
-
-        sceneryGroup.add(pL, pR, portalSign);
-      }
-
-      // Cổng chào CUỐI HẦM (Exit Portal)
-      if (r === tunnelRingsCount) {
-        const portalPillarGeo = new THREE.BoxGeometry(1.6, 12, 1.6);
-        const pL = new THREE.Mesh(portalPillarGeo, archMatDark);
-        pL.position.copy(ringPos).addScaledVector(ringNorm, trackWidth / 2 + 2.5);
-        pL.position.y += 6;
-
-        const pR = new THREE.Mesh(portalPillarGeo, archMatDark);
-        pR.position.copy(ringPos).addScaledVector(ringNorm, -trackWidth / 2 - 2.5);
-        pR.position.y += 6;
-
-        const bannerGeo = new THREE.PlaneGeometry(trackWidth + 3, 2.2);
-        const bannerMat = new THREE.MeshBasicMaterial({ color: 0x22c55e, side: THREE.DoubleSide });
-        const exitSign = new THREE.Mesh(bannerGeo, bannerMat);
-        exitSign.position.copy(ringPos);
-        exitSign.position.y += 11.5;
-        exitSign.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), ringTan);
-
-        sceneryGroup.add(pL, pR, exitSign);
-      }
+      // Đèn LED và vòm Torus Arch khung hầm tạo dải ánh sáng tương lai tuyệt mỹ
     }
 
     archRingsMesh.instanceMatrix.needsUpdate = true;
@@ -860,45 +904,45 @@ export class TrackGenerator {
     ceilingNeonOddMesh.instanceMatrix.needsUpdate = true;
     sceneryGroup.add(archRingsMesh, ceilingNeonEvenMesh, ceilingNeonOddMesh);
 
-    // Start/Finish Arch Gantry (Cổng xuất phát & đích)
+    // Start/Finish Arch Gantry (Cổng xuất phát & đích thẳng hàng 100%, vươn rộng 20m qua 2 bên đường)
     const startPoint = safeGetPointAt(curve, 0);
-    const startTangent = safeGetTangentAt(curve, 0);
-    const startNormal = new THREE.Vector3().crossVectors(startTangent, new THREE.Vector3(0, 1, 0)).normalize();
+    const startTangent = safeGetTangentAt(curve, 0).clone().normalize();
 
     const archGroup = new THREE.Group();
-    const pillarGeo = new THREE.BoxGeometry(1.4, 11, 1.4);
-    const archMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.9, roughness: 0.2 });
+    archGroup.position.copy(startPoint);
+    archGroup.lookAt(startPoint.clone().add(startTangent));
 
-    const p1 = new THREE.Mesh(pillarGeo, archMat);
-    p1.position.copy(startPoint).addScaledVector(startNormal, trackWidth / 2 + 2.0);
-    p1.position.y += 5.5;
+    const archMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.85, roughness: 0.25 });
+    const spanWidth = trackWidth + 5.0; // 20m (chiều rộng đường 15m, 2 trụ đặt ở -10m và +10m cách mép đường 2.5m)
+    const pillarHeight = 11.0;
 
-    const p2 = new THREE.Mesh(pillarGeo, archMat);
-    p2.position.copy(startPoint).addScaledVector(startNormal, -trackWidth / 2 - 2.0);
-    p2.position.y += 5.5;
+    // Trụ trái (Local X = -spanWidth / 2 = -10m)
+    const p1 = new THREE.Mesh(new THREE.BoxGeometry(1.2, pillarHeight, 1.2), archMat);
+    p1.position.set(-spanWidth / 2, pillarHeight / 2, 0);
 
-    const crossbarGeo = new THREE.BoxGeometry(trackWidth + 5, 2.0, 2.0);
-    const crossbar = new THREE.Mesh(crossbarGeo, new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.3, metalness: 0.4 }));
-    crossbar.position.copy(startPoint);
-    crossbar.position.y += 11;
-    crossbar.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), startNormal);
+    // Trụ phải (Local X = +spanWidth / 2 = +10m)
+    const p2 = new THREE.Mesh(new THREE.BoxGeometry(1.2, pillarHeight, 1.2), archMat);
+    p2.position.set(spanWidth / 2, pillarHeight / 2, 0);
 
-    // Start lights (5 green LEDs)
-    const lightGeo = new THREE.SphereGeometry(0.38, 12, 12);
+    // Xà ngang bắc qua đường (Thẳng hàng 100%, vuông góc chính xác với mặt đường đua)
+    const crossbarGeo = new THREE.BoxGeometry(spanWidth + 1.2, 1.6, 1.2);
+    const crossbar = new THREE.Mesh(crossbarGeo, new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.3, metalness: 0.4 }));
+    crossbar.position.set(0, pillarHeight - 0.8, 0);
+
+    // Đèn tín hiệu xuất phát (5 đèn LED màu xanh lá)
+    const lightGeo = new THREE.SphereGeometry(0.35, 12, 12);
     const lightMat = new THREE.MeshBasicMaterial({ color: 0x22c55e });
     for (let sl = -2; sl <= 2; sl++) {
       const slMesh = new THREE.Mesh(lightGeo, lightMat);
-      slMesh.position.copy(startPoint).addScaledVector(startNormal, sl * 1.8);
-      slMesh.position.y += 10.1;
+      slMesh.position.set(sl * 1.8, pillarHeight - 1.6, 0.65);
       archGroup.add(slMesh);
     }
 
-    const bannerGeo = new THREE.PlaneGeometry(trackWidth - 1, 1.6);
+    // Biển hiệu vạch đích / xuất phát
+    const bannerGeo = new THREE.PlaneGeometry(trackWidth + 1.5, 1.2);
     const bannerMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
     const banner = new THREE.Mesh(bannerGeo, bannerMat);
-    banner.position.copy(crossbar.position);
-    banner.position.y -= 0.4;
-    banner.lookAt(startPoint.clone().add(startTangent));
+    banner.position.set(0, pillarHeight - 0.8, 0.65);
 
     archGroup.add(p1, p2, crossbar, banner);
     sceneryGroup.add(archGroup);
@@ -914,7 +958,7 @@ export class TrackGenerator {
     });
     const groundMesh = new THREE.Mesh(groundGeo, groundMat);
     groundMesh.rotation.x = -Math.PI / 2;
-    groundMesh.position.y = -0.5;
+    groundMesh.position.y = -3.8;
     groundMesh.receiveShadow = true;
     sceneryGroup.add(groundMesh);
 
@@ -1001,16 +1045,18 @@ function build3DDecorationItem(name: string, seed: number, biome: any, trackWidt
     }
     case 'Cổng xuất phát':
     case 'Cổng về đích': {
-      const archGroup = new THREE.Group();
-      const pL = new THREE.Mesh(new THREE.BoxGeometry(0.8, 9, 0.8), metalMat);
-      pL.position.set(-trackWidth / 2 - 1.5, 4.5, 0);
-      const pR = new THREE.Mesh(new THREE.BoxGeometry(0.8, 9, 0.8), metalMat);
-      pR.position.set(trackWidth / 2 + 1.5, 4.5, 0);
-      
-      const cross = new THREE.Mesh(new THREE.BoxGeometry(trackWidth + 4, 1.2, 0.8), redMat);
-      cross.position.set(0, 9, 0);
-      archGroup.add(pL, pR, cross);
-      itemGroup.add(archGroup);
+      // Trụ tháp xuất phát / về đích ven đường (Roadside Tower Totem) đứng an toàn 100% ngoài lề đường
+      const towerGroup = new THREE.Group();
+      const base = new THREE.Mesh(new THREE.BoxGeometry(2.0, 1.2, 2.0), metalMat);
+      base.position.set(0, 0.6, 0);
+      const pillar = new THREE.Mesh(new THREE.BoxGeometry(1.2, 8.5, 1.2), grayMat);
+      pillar.position.set(0, 4.85, 0);
+      const headerBox = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.8, 1.4), redMat);
+      headerBox.position.set(0, 8.2, 0);
+      const screen = new THREE.Mesh(new THREE.BoxGeometry(2.8, 1.2, 0.1), new THREE.MeshBasicMaterial({ color: 0x00f0ff }));
+      screen.position.set(0, 8.2, 0.72);
+      towerGroup.add(base, pillar, headerBox, screen);
+      itemGroup.add(towerGroup);
       break;
     }
     case 'Khán đài lớn':

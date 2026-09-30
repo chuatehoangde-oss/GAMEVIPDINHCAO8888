@@ -1,7 +1,8 @@
 import * as Mp4Muxer from 'mp4-muxer';
 import * as WebmMuxer from 'webm-muxer';
-import { audioEngine } from '../engine/audioEngine';
+import { audioEngine, InstanceTelemetrySnapshot } from '../engine/audioEngine';
 import { commentarySoundManager } from '../engine/commentarySoundManager';
+import { commentaryEngine } from '../engine/commentaryEngine';
 
 export interface CodecSelection {
   container: 'mp4' | 'webm';
@@ -403,7 +404,8 @@ export class WebCodecsVideoEncoderSession {
     seed: number = 632585,
     biome?: any,
     weather?: any,
-    carsCount: number = 15
+    carsCount: number = 15,
+    telemetry?: InstanceTelemetrySnapshot[]
   ): Promise<{ blob: Blob; ext: 'mp4' | 'webm'; frameCount: number } | null> {
     if (!this.encoder || this.frameCount === 0) {
       return null;
@@ -416,7 +418,7 @@ export class WebCodecsVideoEncoderSession {
         this.encoder.close();
       }
 
-      // 2. Mã hóa toàn bộ track âm thanh đua xe giả lập 3D không gian (15 xe gầm rú, góc quay trực thăng/drone/ven đường, xé gió)
+      // 2. Mã hóa toàn bộ track âm thanh đua xe giả lập 3D không gian CHUẨN XÁC CỦA CHÍNH LUỒNG ĐUA NÀY
       // kết hợp môi trường Biome và giọng bình luận tiếng Việt / tiếng Anh chuẩn quốc tế
       if (this.audioEncoder && this.hasAudio && this.frameCount > 0) {
         try {
@@ -424,15 +426,32 @@ export class WebCodecsVideoEncoderSession {
           await commentarySoundManager.preloadAll().catch(() => {});
 
           const totalDuration = this.frameCount / this.fps;
-          const pcm = audioEngine.generateRacingAudioPCM(
-            totalDuration,
-            this.audioSampleRate,
-            instanceId,
-            seed,
-            biome,
-            weather,
-            carsCount
-          );
+          let pcm: { left: Float32Array; right: Float32Array; totalSamples: number };
+
+          const commentaryLang = commentaryEngine.getLanguage();
+
+          if (telemetry && telemetry.length > 0) {
+            pcm = await audioEngine.renderInstanceAudioOffline(
+              telemetry,
+              totalDuration,
+              this.audioSampleRate,
+              instanceId,
+              seed,
+              biome,
+              weather,
+              commentaryLang
+            );
+          } else {
+            pcm = audioEngine.generateRacingAudioPCM(
+              totalDuration,
+              this.audioSampleRate,
+              instanceId,
+              seed,
+              biome,
+              weather,
+              carsCount
+            );
+          }
           const chunkSize = 2048;
           const totalFrames = pcm.totalSamples;
 

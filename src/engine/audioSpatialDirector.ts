@@ -17,6 +17,8 @@ export interface SpatialAudioSource {
   speedKmh: number;
   rpm: number;
   throttle: number;
+  gear?: number;
+  hasShiftPop?: boolean;
   isDrifting?: boolean;
   isNitro?: boolean;
   isBraking?: boolean;
@@ -38,6 +40,8 @@ export interface ProcessedCarAcoustic {
   dopplerFactor: number;   // 0.65 to 1.45 (pitch multiplier)
   engineFreq: number;      // Synthesized base pitch Hz
   throttle: number;
+  gear?: number;
+  hasShiftPop?: boolean;
   isDrifting: boolean;
   isNitro: boolean;
   isBraking: boolean;
@@ -91,6 +95,60 @@ export interface FlybyEvent {
   timestamp: number;
 }
 
+/**
+ * Mô phỏng hộp số 8 cấp và tính toán vòng tua máy RPM chân thực cho từng xe đua
+ * Tái tạo sống động "tiếng hát số, tiếng rít ga" đặc trưng của đường đua F1 / Hypercar
+ */
+export function calculateVehicleGearAndRPM(
+  speedKmh: number,
+  isHyperBoosting: boolean = false,
+  isBraking: boolean = false,
+  throttle: number = 0.9
+): { gear: number; rpm: number; gearFactor: number } {
+  const spd = Math.max(0, speedKmh);
+  // Hộp số 8 cấp đua xe thể thao F1 / Le Mans:
+  const gearBrackets = [
+    { gear: 1, min: 0, max: 95 },
+    { gear: 2, min: 95, max: 170 },
+    { gear: 3, min: 170, max: 255 },
+    { gear: 4, min: 255, max: 345 },
+    { gear: 5, min: 345, max: 435 },
+    { gear: 6, min: 435, max: 515 },
+    { gear: 7, min: 515, max: 585 },
+    { gear: 8, min: 585, max: 670 }
+  ];
+
+  let currentBracket = gearBrackets[gearBrackets.length - 1];
+  for (const b of gearBrackets) {
+    if (spd <= b.max) {
+      currentBracket = b;
+      break;
+    }
+  }
+
+  const range = Math.max(10, currentBracket.max - currentBracket.min);
+  const gearProgress = Math.max(0, Math.min(1.0, (spd - currentBracket.min) / range));
+
+  // Vòng tua máy RPM: trong mỗi cấp số leo từ 6,200 lên 10,200 RPM
+  let baseRpm = 6200 + gearProgress * 4000;
+
+  // Hiệu ứng bứt tốc Nitro HyperBoost: rít ga chạm redline 10,800 RPM
+  if (isHyperBoosting) {
+    baseRpm = Math.min(10850, baseRpm + 1200);
+  }
+
+  // Hiệu ứng phanh / hạ nhiệt: nhả ga tụt tua máy
+  if (isBraking) {
+    baseRpm = Math.max(4600, baseRpm * 0.72);
+  }
+
+  return {
+    gear: currentBracket.gear,
+    rpm: baseRpm,
+    gearFactor: gearProgress
+  };
+}
+
 export class AudioSpatialDirector {
   // Speed of sound in dry air: 343 m/s = ~1235 km/h
   public static readonly SPEED_OF_SOUND_KMH = 1235.0;
@@ -98,11 +156,26 @@ export class AudioSpatialDirector {
   // Track previous car positions & distances for Doppler and Flyby detection
   private previousCarDistances: Map<string, { distance: number; time: number; pos: THREE.Vector3 }> = new Map();
   private lastFlybyTimes: Map<string, number> = new Map();
+  private lastGlobalFlybyTime: number = 0;
+  private lastCameraPos: THREE.Vector3 | null = null;
+  private lastCameraMode: string | null = null;
 
   // Temporary vectors to avoid allocations
   private _camRight = new THREE.Vector3();
   private _upVec = new THREE.Vector3(0, 1, 0);
   private _relPos = new THREE.Vector3();
+
+  /**
+   * Đặt lại trạng thái Doppler và Flyby để đảm bảo kết xuất ngoại tuyến (OfflineAudioContext)
+   * hoàn toàn thuần khiết, xác thực 100% không bị ảnh hưởng bởi phiên chạy trực tiếp trước đó
+   */
+  public resetState() {
+    this.previousCarDistances.clear();
+    this.lastFlybyTimes.clear();
+    this.lastGlobalFlybyTime = 0;
+    this.lastCameraPos = null;
+    this.lastCameraMode = null;
+  }
 
   /**
    * Phân loại môi trường âm thanh Biome & Weather
@@ -214,7 +287,7 @@ export class AudioSpatialDirector {
       exhaustDirectness: 1.0,
       mechanicalChamberResonance: 0.2,
       tunnelReverbFeedback: 0.0,
-      flybySensitivity: 0.45,
+      flybySensitivity: 0.85, // Mặc định độ nhạy xé gió vượt mặt cao cho toàn bộ mọi góc quay
       crowdBleedVol: 0.18,
       masterEqPreset: 'neutral'
     };
@@ -230,7 +303,7 @@ export class AudioSpatialDirector {
         base.cabinMuffleCutoff = 8500;
         base.crowdBleedVol = 0.22;
         base.masterEqPreset = 'bass_heavy';
-        base.flybySensitivity = 0.15;
+        base.flybySensitivity = 0.75;
         break;
 
       // 2. FLYCAM / RACING DRONE FPV (High-pitch brushless motor whine 780-920Hz, aggressive air slice)
@@ -242,7 +315,7 @@ export class AudioSpatialDirector {
         base.windVolume = 0.38;
         base.cabinMuffleCutoff = 16000;
         base.masterEqPreset = 'neutral';
-        base.flybySensitivity = 0.55;
+        base.flybySensitivity = 0.80;
         break;
 
       // 3. TELEPHOTO VEN ĐƯỜNG 85mm F1 (Long distance silence -> massive Doppler frequency shift -> sonic whoosh)
@@ -337,6 +410,7 @@ export class AudioSpatialDirector {
         base.windVolume = 0.34;
         base.mechanicalChamberResonance = 0.4;
         base.exhaustDirectness = 1.1;
+        base.flybySensitivity = 0.95;
         break;
 
       // 14. TRẦN HẦM HẮT XUỐNG SIÊU TỐC (Cavernous tunnel reverb, low-end boom at 200Hz, enclosed acoustics)
@@ -346,6 +420,7 @@ export class AudioSpatialDirector {
         base.masterEqPreset = 'tunnel_hollow';
         base.windVolume = 0.48;
         base.exhaustDirectness = 1.4;
+        base.flybySensitivity = 0.90;
         break;
 
       // 15. CHẮN BÙN NHÌN LỐP & HÔNG XE (Extreme tire proximity, asphalt granular texture, brake rotor hiss)
@@ -355,6 +430,7 @@ export class AudioSpatialDirector {
         base.windVolume = 0.36;
         base.mechanicalChamberResonance = 0.6;
         base.exhaustDirectness = 0.9;
+        base.flybySensitivity = 0.95;
         break;
 
       // 16. ĐUÔI GIÓ NHÌN NGƯỢC (Exhaust pipes firing straight into mic, turbo blow-off pops and crackles)
@@ -363,6 +439,7 @@ export class AudioSpatialDirector {
         base.windVolume = 0.55 + speedRatio * 0.3;
         base.mechanicalChamberResonance = 0.75;
         base.masterEqPreset = 'bass_heavy';
+        base.flybySensitivity = 0.95;
         break;
 
       // 17. CAMERA ÂM VỈA GỜ GIẢM TỐC (Deep kerb suspension thud, sub-bass chassis shake over rumble strip)
@@ -383,6 +460,7 @@ export class AudioSpatialDirector {
         base.exhaustDirectness = 0.6;
         base.crowdBleedVol = 0.04;
         base.masterEqPreset = 'treble_cut';
+        base.flybySensitivity = 0.92;
         break;
 
       // 19. CẢN TRƯỚC SIÊU TỐC (Raw frontal hurricane wind, radiator suction, uninhibited road spray)
@@ -392,6 +470,7 @@ export class AudioSpatialDirector {
         base.cabinMuffleCutoff = 18000;
         base.mechanicalChamberResonance = 0.5;
         base.exhaustDirectness = 0.8;
+        base.flybySensitivity = 0.95;
         break;
 
       // 20. PHÍA SAU XE XA 100M (The golden chase ratio: balance of deep exhaust, tire scrub and draft wind)
@@ -399,6 +478,7 @@ export class AudioSpatialDirector {
         base.exhaustDirectness = 1.35;
         base.windVolume = 0.28;
         base.mechanicalChamberResonance = 0.35;
+        base.flybySensitivity = 0.90;
         break;
 
       // 21. MUI XE / NẮP CAPO (Direct engine block vibration, intake roar, valve chatter, turbo spool)
@@ -407,6 +487,7 @@ export class AudioSpatialDirector {
         base.mechanicalChamberResonance = 0.85;
         base.windVolume = 0.42;
         base.exhaustDirectness = 0.9;
+        base.flybySensitivity = 0.95;
         break;
 
       // 22. SÁT MẶT ĐƯỜNG 1.18M (Sub-bass asphalt rumble, ground-effect air stream, suspension load)
@@ -415,6 +496,7 @@ export class AudioSpatialDirector {
         base.kerbRumbleBoost = 1.6;
         base.windVolume = 0.38;
         base.masterEqPreset = 'bass_heavy';
+        base.flybySensitivity = 0.95;
         break;
 
       // 23. BÊN HÔNG XE (Lateral tire slide hiss, dynamic body Doppler sweep)
@@ -422,6 +504,7 @@ export class AudioSpatialDirector {
         base.windVolume = 0.32;
         base.exhaustDirectness = 1.15;
         base.mechanicalChamberResonance = 0.45;
+        base.flybySensitivity = 0.92;
         break;
 
       // 24. BÁM XE DẪN ĐẦU & ĐOÀN ĐUA (Pristine broadcast balance, clean tracking mix)
@@ -429,6 +512,7 @@ export class AudioSpatialDirector {
         base.exhaustDirectness = 1.2;
         base.windVolume = 0.25;
         base.crowdBleedVol = 0.22;
+        base.flybySensitivity = 0.85;
         break;
 
       // 25. GÓC VƯỢT MẶT (Dual competing engine harmonic beats, vacuum slipstream suction whoosh)
@@ -436,7 +520,7 @@ export class AudioSpatialDirector {
         base.isPackChase = true;
         base.exhaustDirectness = 1.45;
         base.windVolume = 0.38;
-        base.flybySensitivity = 0.75;
+        base.flybySensitivity = 1.0;
         break;
 
       // 26. VA CHẠM & DRIFT (High tire screech, rubber burning harmonics, body scrape friction)
@@ -445,13 +529,14 @@ export class AudioSpatialDirector {
         base.exhaustDirectness = 1.3;
         base.windVolume = 0.25;
         base.masterEqPreset = 'neutral';
+        base.flybySensitivity = 0.90;
         break;
 
       // 27. XOAY 360 VÒNG QUANH XE (Dynamic spatial revolving panning around engine & exhaust)
       case CameraMode.CINEMATIC_ORBIT:
         base.windVolume = 0.24;
         base.exhaustDirectness = 1.25;
-        base.flybySensitivity = 0.4;
+        base.flybySensitivity = 0.80;
         break;
 
       default:
@@ -469,14 +554,26 @@ export class AudioSpatialDirector {
   public processSpatialVehicles(
     cars: SpatialAudioSource[],
     camera: SpatialCameraListener,
-    currentTimeSec: number
+    currentTimeSec: number,
+    activeOvertakeCarId?: string | null
   ): {
+    allCars: ProcessedCarAcoustic[];
     sortedCars: ProcessedCarAcoustic[];
     activeFlybys: FlybyEvent[];
     nearestCar: ProcessedCarAcoustic | null;
   } {
     // Vector hướng phải của Camera: Right = Forward x Up
     this._camRight.crossVectors(camera.forward, this._upVec).normalize();
+
+    // Kiểm tra chuyển góc máy quay (Camera Cut / Teleportation)
+    // Nếu camera vừa đổi vị trí trên 14m hoặc đổi mode, loại bỏ bước nhảy Doppler tức thì
+    let isCameraCut = false;
+    const currentCamModeStr = typeof camera.mode === 'string' ? camera.mode : String(camera.mode);
+    if (!this.lastCameraPos || currentCamModeStr !== this.lastCameraMode) {
+      isCameraCut = true;
+    } else if (this.lastCameraPos.distanceTo(camera.position) > 14.0) {
+      isCameraCut = true;
+    }
 
     const processed: ProcessedCarAcoustic[] = [];
     const detectedFlybys: FlybyEvent[] = [];
@@ -498,11 +595,11 @@ export class AudioSpatialDirector {
       // 5m: 6000Hz -> 100m: 1100Hz -> 300m: 450Hz
       const filterCutoff = Math.max(400, Math.min(7500, 7500 / (1.0 + distance / 35.0)));
 
-      // Tính toán Doppler Shift
+      // Tính toán Doppler Shift (khử hoàn toàn nhiễu khi đổi góc camera)
       let dopplerFactor = 1.0;
       const prevData = this.previousCarDistances.get(car.id);
 
-      if (prevData && currentTimeSec > prevData.time) {
+      if (!isCameraCut && prevData && currentTimeSec > prevData.time) {
         const dt = Math.max(0.001, currentTimeSec - prevData.time);
         const distanceDelta = distance - prevData.distance; // Dương = đang chạy ra xa, Âm = đang áp sát
         const radialVelocityMps = distanceDelta / dt; // m/s
@@ -510,28 +607,58 @@ export class AudioSpatialDirector {
 
         // Công thức Doppler: f' = f * (c / (c + v_radial))
         const c = AudioSpatialDirector.SPEED_OF_SOUND_KMH;
-        dopplerFactor = Math.max(0.65, Math.min(1.48, c / (c + radialVelocityKmh)));
+        dopplerFactor = Math.max(0.70, Math.min(1.42, c / (c + radialVelocityKmh)));
+      }
 
-        // Phát hiện hiệu ứng xé gió Flyby vụt qua màn hình:
-        // Xe áp sát cực gần (< 18m) với tốc độ cao (> 180 km/h) và vừa chuyển từ tiến tới -> lướt qua
-        const lastFlyby = this.lastFlybyTimes.get(car.id) || 0;
-        if (
-          distance < 18.0 &&
-          car.speedKmh > 180 &&
-          prevData.distance > distance &&
-          currentTimeSec - lastFlyby > 3.0 // Cooldown 3s mỗi xe
-        ) {
-          this.lastFlybyTimes.set(car.id, currentTimeSec);
-          detectedFlybys.push({
-            carId: car.id,
-            driverName: car.driverName,
-            speedKmh: Math.round(car.speedKmh),
-            distance,
-            panStart: -Math.sign(pan || 1) * 0.9,
-            panEnd: Math.sign(pan || 1) * 0.95,
-            timestamp: currentTimeSec
-          });
+      // Phát hiện hiệu ứng xé gió Flyby / Vượt mặt vụt qua ("vèo vèo") cho TẤT CẢ các góc quay:
+      // Áp dụng activeOvertakeCarId trực tiếp từ vật lý đua xe & Doppler âm học điện ảnh
+      const isOvertakingCar = Boolean(activeOvertakeCarId && car.id === activeOvertakeCarId) || Boolean(car.isNitro && car.speedKmh > 450);
+
+      let shouldTriggerFlyby = false;
+      const panDir = Math.sign(pan) || (car.id.charCodeAt(0) % 2 === 0 ? 1 : -1);
+      let flybyPanStart = Math.max(-0.95, Math.min(0.95, -panDir * 0.85));
+      let flybyPanEnd = Math.max(-0.95, Math.min(0.95, panDir * 0.95));
+
+      if (prevData) {
+        const prevRel = prevData.pos.clone().sub(camera.position);
+        const prevRightDot = prevRel.dot(this._camRight);
+        const prevPan = Math.max(-1.0, Math.min(1.0, (prevRightDot / Math.max(1, prevRel.length())) * 1.5));
+        if (Math.abs(pan - prevPan) > 0.04) {
+          flybyPanStart = prevPan < pan ? -0.85 : 0.85;
+          flybyPanEnd = prevPan < pan ? 0.95 : -0.95;
         }
+      }
+
+      if (currentTimeSec - this.lastGlobalFlybyTime > 1.4) {
+        if (isOvertakingCar && distance < 85.0) {
+          // Xe đang bứt phá vượt mặt trực tiếp từ vật lý đua xe: phát tiếng vèo vèo chuẩn điện ảnh
+          shouldTriggerFlyby = true;
+        } else if (prevData && currentTimeSec > prevData.time) {
+          const dt = Math.max(0.001, currentTimeSec - prevData.time);
+          const distanceDelta = distance - prevData.distance;
+          const radialVelocityKmh = (distanceDelta / dt) * 3.6;
+
+          // Cho góc quay bám xe / gắn trên xe hoặc ven đường: xe quét qua rất gần với tốc độ chênh lệch cao
+          const isCloseSweep = distance < 35.0 && Math.abs(radialVelocityKmh) > 25.0 && car.speedKmh > 240;
+          if (isCloseSweep) {
+            shouldTriggerFlyby = true;
+          }
+        }
+      }
+
+      // Chỉ thêm tối đa 1 sự kiện flyby duy nhất trong một frame
+      if (shouldTriggerFlyby && detectedFlybys.length === 0) {
+        this.lastGlobalFlybyTime = currentTimeSec;
+        this.lastFlybyTimes.set(car.id, currentTimeSec);
+        detectedFlybys.push({
+          carId: car.id,
+          driverName: car.driverName,
+          speedKmh: Math.round(car.speedKmh),
+          distance,
+          panStart: flybyPanStart,
+          panEnd: flybyPanEnd,
+          timestamp: currentTimeSec
+        });
       }
 
       // Lưu lại dữ liệu vị trí frame trước
@@ -541,17 +668,28 @@ export class AudioSpatialDirector {
         pos: car.position.clone()
       });
 
+      // Tính toán hộp số & vòng tua máy RPM sinh động chân thực ("tiếng hát số, tiếng rít ga")
+      const gearData = calculateVehicleGearAndRPM(
+        car.speedKmh,
+        Boolean(car.isNitro),
+        Boolean(car.isBraking),
+        car.throttle
+      );
+      const effectiveRpm = car.rpm && Math.abs(car.rpm - (1400 + (car.speedKmh / 550) * 7800)) > 200
+        ? car.rpm
+        : gearData.rpm;
+
       // Tần số động cơ đặc trưng theo loại xe (Hypercar, Muscle, Formula, GT, Cyber)
       let baseEngineHz = 65;
       const carType = car.type || 'hypercar';
       switch (carType) {
         case 'formula':
           // Tiếng thét F1 V10 vòng tua cao: 120Hz -> 420Hz
-          baseEngineHz = 110 + (car.rpm / 12000) * 310;
+          baseEngineHz = 110 + (effectiveRpm / 12000) * 310;
           break;
         case 'muscle':
           // Tiếng gầm gừ uy lực V8 Mỹ: 45Hz -> 210Hz
-          baseEngineHz = 42 + (car.rpm / 6800) * 168;
+          baseEngineHz = 42 + (effectiveRpm / 6800) * 168;
           break;
         case 'cyber_coupe':
           // Động cơ điện siêu âm & Inverter: 150Hz -> 520Hz
@@ -559,11 +697,11 @@ export class AudioSpatialDirector {
           break;
         case 'gt_racer':
           // GT3 V6 Twin-Turbo: 75Hz -> 310Hz
-          baseEngineHz = 70 + (car.rpm / 8500) * 240;
+          baseEngineHz = 70 + (effectiveRpm / 8500) * 240;
           break;
         default:
           // Hypercar V12: 80Hz -> 360Hz
-          baseEngineHz = 75 + (car.rpm / 9500) * 285;
+          baseEngineHz = 75 + (effectiveRpm / 9500) * 285;
           break;
       }
 
@@ -578,6 +716,8 @@ export class AudioSpatialDirector {
         dopplerFactor,
         engineFreq: finalEngineFreq,
         throttle: car.throttle,
+        gear: car.gear ?? gearData.gear,
+        hasShiftPop: Boolean(car.hasShiftPop),
         isDrifting: Boolean(car.isDrifting),
         isNitro: Boolean(car.isNitro),
         isBraking: Boolean(car.isBraking),
@@ -585,13 +725,22 @@ export class AudioSpatialDirector {
       });
     }
 
-    // Sắp xếp các xe theo độ gần camera nhất (gần nhất sẽ nghe rõ nhất và chi tiết nhất)
-    processed.sort((a, b) => a.distance - b.distance);
+    // Cập nhật vị trí và góc quay camera cho frame tiếp theo
+    if (!this.lastCameraPos) {
+      this.lastCameraPos = camera.position.clone();
+    } else {
+      this.lastCameraPos.copy(camera.position);
+    }
+    this.lastCameraMode = currentCamModeStr;
+
+    // Sắp xếp các xe theo độ gần camera nhất (dùng cho nearest car, flyby và pack roar)
+    const sorted = [...processed].sort((a, b) => a.distance - b.distance);
 
     return {
-      sortedCars: processed,
+      allCars: processed, // Thứ tự xe cố định, đảm bảo ánh xạ 1:1 Voice độc lập bền vững
+      sortedCars: sorted,
       activeFlybys: detectedFlybys,
-      nearestCar: processed[0] || null
+      nearestCar: sorted[0] || null
     };
   }
 }

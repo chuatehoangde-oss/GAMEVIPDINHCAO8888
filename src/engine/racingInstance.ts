@@ -178,9 +178,13 @@ function customizeBiomeBySeed(baseBiome: TrackBiome, seed: number, instanceId: n
   return biome;
 }
 
-// DANH SÁCH 140+ TAY ĐUA HUYỀN THOẠI F1, SIÊU SAO THỂ THAO & CHAMPIONS
-// Đảm bảo khi chạy 8 luồng song song (8 x 16 = 128 xe) không bao giờ bị trùng lặp tên tay đua
+// DANH SÁCH TAY ĐUA HUYỀN THOẠI & SIÊU SAO ĐỒNG BỘ 100% VỚI MÀN HÌNH GAME
+// Bắt đầu chính xác bằng các siêu sao toàn cầu: Messi, Ronaldo, Neymar, Beckham, Mbappé...
 const DRIVER_NAMES = [
+  // 12 Siêu sao Huyền Thoại chuẩn quốc tế đồng bộ 100% với màn hình Game & Tên Video
+  'Lionel Messi', 'Cristiano Ronaldo', 'Neymar Jr.', 'David Beckham', 'Kylian Mbappé',
+  'Ronaldinho', 'Ronaldo Nazário', 'Zinedine Zidane', 'Pelé', 'Zlatan Ibrahimović',
+  'Diego Maradona', 'Thierry Henry',
   // F1 Modern Champions & Superstars (25 tay đua)
   'Max Verstappen', 'Lewis Hamilton', 'Charles Leclerc', 'Lando Norris', 'Fernando Alonso',
   'Carlos Sainz', 'George Russell', 'Oscar Piastri', 'Sergio Pérez', 'Pierre Gasly',
@@ -200,19 +204,12 @@ const DRIVER_NAMES = [
   'Ken Block', 'Travis Pastrana', 'Valentino Rossi', 'Marc Márquez', 'Francesco Bagnaia',
   'Dale Earnhardt', 'Jeff Gordon', 'Richard Petty', 'Jimmie Johnson', 'Tony Stewart',
   'Jack Brabham', 'Denny Hulme', 'John Surtees', 'Phil Hill', 'Mike Hawthorn',
-  // Iconic F1 Podium Winners (15 tay đua)
-  'Jochen Mass', 'René Arnoux', 'Patrick Tambay', 'Thierry Boutsen', 'Eddie Irvine',
-  'Heinz-Harald Frentzen', 'Ralf Schumacher', 'Romain Grosjean', 'Kamui Kobayashi', 'Takuma Sato',
-  'Pastor Maldonado', 'Daniil Kvyat', 'Jean-Éric Vergne', 'Stoffel Vandoorne', 'Marcus Ericsson',
-  // Global Football & Sports Legends (35 huyền thoại)
-  'Cristiano Ronaldo', 'Lionel Messi', 'Kylian Mbappé', 'Erling Haaland', 'Neymar Jr.',
-  'Jude Bellingham', 'Vinícius Júnior', 'Kevin De Bruyne', 'Mohamed Salah', 'Harry Kane',
-  'Luka Modrić', 'Zlatan Ibrahimović', 'Ronaldinho', 'Ronaldo Nazário', 'Zinedine Zidane',
-  'Thierry Henry', 'Kaká', 'David Beckham', 'Pelé', 'Diego Maradona',
-  'Karim Benzema', 'Robert Lewandowski', 'Xavi Hernández', 'Andrés Iniesta', 'Andrea Pirlo',
-  'Gianluigi Buffon', 'Paolo Maldini', 'Roberto Carlos', 'Rivaldo', 'Arjen Robben',
-  'Robin van Persie', 'Miroslav Klose', 'Bastian Schweinsteiger', 'Iker Casillas', 'Fernando Torres',
-  // Global Iconic Super Athletes (19 siêu sao)
+  // Global Football & Sports Legends
+  'Erling Haaland', 'Jude Bellingham', 'Vinícius Júnior', 'Kevin De Bruyne', 'Mohamed Salah',
+  'Harry Kane', 'Luka Modrić', 'Kaká', 'Karim Benzema', 'Robert Lewandowski',
+  'Xavi Hernández', 'Andrés Iniesta', 'Andrea Pirlo', 'Gianluigi Buffon', 'Paolo Maldini',
+  'Roberto Carlos', 'Rivaldo', 'Arjen Robben', 'Robin van Persie', 'Miroslav Klose',
+  // Global Iconic Super Athletes
   'LeBron James', 'Michael Jordan', 'Kobe Bryant', 'Stephen Curry', 'Shaquille O\'Neal',
   'Roger Federer', 'Rafael Nadal', 'Novak Djokovic', 'Usain Bolt', 'Michael Phelps',
   'Tiger Woods', 'Muhammad Ali', 'Mike Tyson', 'Conor McGregor', 'Carlos Alcaraz',
@@ -367,7 +364,7 @@ export class RacingInstance {
       this.trackMeshGroup.remove(this.trackMeshGroup.children[0]);
     }
 
-    this.track = TrackGenerator.generateTrack(seed, biome);
+    this.track = TrackGenerator.generateTrack(seed, biome, this.id);
     this.trackMeshGroup.add(this.track.trackMesh);
     this.track.curbMeshes.forEach(mesh => this.trackMeshGroup.add(mesh));
     this.trackMeshGroup.add(this.track.sceneryGroup);
@@ -389,9 +386,8 @@ export class RacingInstance {
     for (let i = 0; i < numCars; i++) {
       const colorInfo = CAR_COLORS[(this.id * 5 + i * 3) % CAR_COLORS.length];
       const carName = CAR_NAMES[(this.id * 3 + i * 2) % CAR_NAMES.length];
-      // Đảm bảo cả 8 luồng chạy song song không bao giờ trùng tên tay đua:
-      // Luồng 1 nhận 0..15, Luồng 2 nhận 16..31, Luồng 3 nhận 32..47, ... Luồng 8 nhận 112..127
-      const driverIdx = ((this.id - 1) * 16 + i) % DRIVER_NAMES.length;
+      // Đồng bộ chuẩn 100% với màn hình Game & Tên video xuất xưởng (Lionel Messi, Cristiano Ronaldo...)
+      const driverIdx = i % DRIVER_NAMES.length;
       const driver = DRIVER_NAMES[driverIdx];
       const meshIdx = i % 5;
 
@@ -496,15 +492,23 @@ export class RacingInstance {
     delta: number,
     aiAggressionGlobal: number = 0.85,
     cinematicAutoDirector: boolean = true
-  ): { chunkCompleted: boolean; activeOvertakeCarId: string | null; collisionCarId: string | null } {
+  ): {
+    chunkCompleted: boolean;
+    activeOvertakeCarId: string | null;
+    collisionCarId: string | null;
+    collisionCarPos?: THREE.Vector3 | null;
+    collisionIntensity?: number;
+  } {
     this.chunkTimeElapsed += delta;
     const chunkCompleted = this.chunkTimeElapsed >= this.totalChunkDuration;
     let activeOvertake: string | null = null;
     let activeCollision: string | null = null;
+    let activeCollisionPos: THREE.Vector3 | null = null;
+    let activeCollisionIntensity = 0;
 
     if (this.track && this.cars.length > 0) {
       // 1. Run vehicle physics & steering AI
-      const { activeOvertakeCarId, collisionCarId } = VehiclePhysicsSystem.updateVehicles(
+      const { activeOvertakeCarId, collisionCarId, collisionCarPos, collisionIntensity } = VehiclePhysicsSystem.updateVehicles(
         this.cars,
         this.track.curve,
         this.track.totalLength,
@@ -513,6 +517,8 @@ export class RacingInstance {
       );
       activeOvertake = activeOvertakeCarId;
       activeCollision = collisionCarId;
+      activeCollisionPos = collisionCarPos || null;
+      activeCollisionIntensity = collisionIntensity || 0;
 
       // 2. Update Camera Director
       this.cameraDirector.update(
@@ -524,7 +530,13 @@ export class RacingInstance {
       );
     }
 
-    return { chunkCompleted, activeOvertakeCarId: activeOvertake, collisionCarId: activeCollision };
+    return {
+      chunkCompleted,
+      activeOvertakeCarId: activeOvertake,
+      collisionCarId: activeCollision,
+      collisionCarPos: activeCollisionPos,
+      collisionIntensity: activeCollisionIntensity
+    };
   }
 
   getRuntimeState(): InstanceRuntime {

@@ -242,9 +242,16 @@ export class VehiclePhysicsSystem {
     totalLength: number,
     delta: number,
     globalAggression: number
-  ): { activeOvertakeCarId: string | null; collisionCarId: string | null } {
+  ): {
+    activeOvertakeCarId: string | null;
+    collisionCarId: string | null;
+    collisionCarPos?: THREE.Vector3 | null;
+    collisionIntensity?: number;
+  } {
     let activeOvertakeCarId: string | null = null;
     let collisionCarId: string | null = null;
+    let collisionCarPos: THREE.Vector3 | null = null;
+    let collisionIntensity = 0;
 
     const trackWidth = 12.0;
 
@@ -335,8 +342,8 @@ export class VehiclePhysicsSystem {
             }
           }
 
-          // Nếu có xe cùng làn ngay trước mặt dưới 32 mét -> Bị chắn đường!
-          if (Math.abs(s.lateralOffset - other.lateralOffset) < 0.28 && worldDist < 32) {
+          // Nếu có xe cùng làn hoặc làn sát bên ngay trước mặt dưới 45 mét -> Kích hoạt né tránh & lạng lách!
+          if (Math.abs(s.lateralOffset - other.lateralOffset) < 0.38 && worldDist < 45) {
             isDirectlyBlockedAhead = true;
           }
         }
@@ -419,19 +426,59 @@ export class VehiclePhysicsSystem {
       s.targetSpeed = Math.max(400, Math.min(650, s.targetSpeed));
 
       // Gia tốc mượt mà, phản hồi chân thực không giật cục:
-      if (s.speed < s.targetSpeed) {
+      const speedDiff = s.targetSpeed - s.speed;
+      if (speedDiff > 0) {
         const accelRate = isHyperBoosting ? (90.0 + s.aggression * 30.0) : (45.0 + s.acceleration * 5.0);
         s.speed = Math.min(s.targetSpeed, s.speed + accelRate * delta);
-      } else if (s.speed > s.targetSpeed) {
+        s.throttle = isHyperBoosting ? 1.0 : Math.min(1.0, 0.75 + Math.min(0.25, speedDiff / 35));
+        s.isBraking = false;
+      } else if (speedDiff < -3.0) {
         const decelRate = s.cooldownTimer > 0 ? 48.0 : 30.0;
         s.speed = Math.max(s.targetSpeed, s.speed - decelRate * delta);
+        s.throttle = 0.08;
+        s.isBraking = true;
+      } else {
+        s.throttle = 0.68;
+        s.isBraking = false;
       }
 
       // Giới hạn tuyệt đối tốc độ xe chạy trong khoảng 400 đến 650 km/h
       s.speed = Math.max(400, Math.min(650, s.speed));
 
-      // Đánh dấu hành động vượt mặt & làm xe bị vượt giảm nhẹ tốc độ (Dirty Air) để pha vượt dứt khoát
-      if (isHyperBoosting && carAheadDist < 26 && s.speed > carAheadSpeed + 15) {
+      // Hộp số 8 cấp & Vòng tua máy RPM chính xác
+      const gearBrackets = [
+        { gear: 1, min: 0, max: 95 },
+        { gear: 2, min: 95, max: 170 },
+        { gear: 3, min: 170, max: 255 },
+        { gear: 4, min: 255, max: 345 },
+        { gear: 5, min: 345, max: 435 },
+        { gear: 6, min: 435, max: 515 },
+        { gear: 7, min: 515, max: 585 },
+        { gear: 8, min: 585, max: 670 }
+      ];
+      let currentG = gearBrackets[gearBrackets.length - 1];
+      for (const gb of gearBrackets) {
+        if (s.speed <= gb.max) {
+          currentG = gb;
+          break;
+        }
+      }
+      const gProg = Math.max(0, Math.min(1.0, (s.speed - currentG.min) / (currentG.max - currentG.min)));
+      let curRpm = 6200 + gProg * 4000;
+      if (s.isHyperBoosting) curRpm = Math.min(10850, curRpm + 1200);
+      if (s.isBraking) curRpm = Math.max(4600, curRpm * 0.75);
+      const oldGear = s.gear ?? currentG.gear;
+      if (currentG.gear > oldGear) {
+        s.hasShiftPop = true;
+      } else {
+        s.hasShiftPop = false;
+      }
+      s.previousGear = oldGear;
+      s.gear = currentG.gear;
+      s.rpm = curRpm;
+
+      // Đánh dấu hành động vượt mặt trực tiếp từ vật lý đua xe & làm xe bị vượt giảm nhẹ tốc độ (Dirty Air) để pha vượt dứt khoát
+      if ((isHyperBoosting && carAheadDist < 30 && s.speed > carAheadSpeed + 10) || (carAheadDist < 24 && s.speed > carAheadSpeed + 12)) {
         activeOvertakeCarId = s.id;
         if (carAheadId) {
           const overtakenCar = cars.find(c => c.state.id === carAheadId);
@@ -443,18 +490,19 @@ export class VehiclePhysicsSystem {
       }
 
       // =========================================================================
-      // 2. CHIẾN THUẬT ĐẢO LÀN ĐƯỜNG LIÊN TỤC & ĐA DẠNG (LANE WEAVING & OVERTAKING)
+      // 2. CHIẾN THUẬT LẠNG LÁCH & ĐẢO LÀN ĐƯỜNG VƯỢT XE (LANE WEAVING & OVERTAKING)
       // =========================================================================
-      const shouldForceLaneChange = isDirectlyBlockedAhead || (s.laneChangeTimer <= 0) || (isHyperBoosting && carAheadDist < 45);
+      const isApproachingAhead = carAheadDist < 45 && Math.abs(s.lateralOffset - carAheadLateral) < 0.38;
+      const shouldForceLaneChange = isDirectlyBlockedAhead || isApproachingAhead || (s.laneChangeTimer <= 0) || (isHyperBoosting && carAheadDist < 55);
 
       if (shouldForceLaneChange) {
-        // Reset timer đổi làn linh hoạt: từ 1.2 đến 2.5 giây đổi làn 1 lần
-        s.laneChangeTimer = 1.2 + Math.random() * 1.5;
+        // Reset timer đổi làn linh hoạt: từ 1.0 đến 2.2 giây đổi làn 1 lần
+        s.laneChangeTimer = 1.0 + Math.random() * 1.2;
 
         let bestLane = s.targetLateralOffset;
 
-        if (isHyperBoosting || isPullingAway || carAheadDist < 50) {
-          // KHI ĐANG VƯỢT: Tìm làn trống nhất phía trước (khoảng cách xe phía trước xa nhất)
+        if (isHyperBoosting || isPullingAway || carAheadDist < 60 || isDirectlyBlockedAhead) {
+          // KHI ĐANG VƯỢT HOẶC BỊ CHẮN ĐƯỜNG: Tìm làn thông thoáng nhất phía trước
           let maxClearDist = -1;
           let candidateLanes: number[] = [];
 
@@ -462,8 +510,8 @@ export class VehiclePhysicsSystem {
             const lanePos = AVAILABLE_LANES[l];
             const distInLane = laneDistances[l];
 
-            // Ưu tiên làn có khoảng cách thông thoáng trên 25m và không cùng làn xe bị cản
-            if (distInLane > 25 && Math.abs(lanePos - carAheadLateral) > 0.25) {
+            // Ưu tiên làn có khoảng cách thông thoáng trên 35m và cách xa xe bị cản ít nhất 0.30 đơn vị ngang
+            if (distInLane > 35 && Math.abs(lanePos - carAheadLateral) > 0.30) {
               candidateLanes.push(lanePos);
             }
             if (distInLane > maxClearDist) {
@@ -476,6 +524,9 @@ export class VehiclePhysicsSystem {
             // Chọn làn thoáng gần làn hiện tại nhất để lách qua nhanh nhất
             candidateLanes.sort((a, b) => Math.abs(a - s.lateralOffset) - Math.abs(b - s.lateralOffset));
             bestLane = candidateLanes[0];
+          } else {
+            // Nếu các làn đều có xe, chủ động lách hẳn sang phía đối diện của xe cản
+            bestLane = carAheadLateral > 0 ? -0.45 : 0.45;
           }
         } else if (Math.abs(turnCurl) > 0.08) {
           // KHI VÀO CUA: Cắt vào làn cua trong (Apex Clipping)
@@ -496,8 +547,11 @@ export class VehiclePhysicsSystem {
         s.targetLateralOffset = bestLane;
       }
 
-      // Chuyển làn dứt khoát, mượt mà, phản hồi sắc nét như tay đua chuyên nghiệp
-      const steerSpeed = 4.2 * (s.aggression + 0.4);
+      // Chuyển làn dứt khoát: Khi áp sát xe khác (< 40m), tăng mạnh tốc độ lạng lách để bứt qua không bị đâm xuyên!
+      let steerSpeed = 4.8 * (s.aggression + 0.4);
+      if (carAheadDist < 40 && Math.abs(s.lateralOffset - carAheadLateral) < 0.38) {
+        steerSpeed = 8.5 * (s.aggression + 0.5); // Lạng lách siêu tốc né xe
+      }
       const steerDiff = s.targetLateralOffset - s.lateralOffset;
       s.lateralOffset += steerDiff * Math.min(1.0, delta * steerSpeed);
       s.lateralOffset = Math.max(-0.82, Math.min(0.82, s.lateralOffset));
@@ -543,7 +597,7 @@ export class VehiclePhysicsSystem {
       }
     }
 
-    // Step 2: Car-to-car collision resolution
+    // Step 2: Car-to-car collision resolution & Anti-Clipping Solid Body Physics (Ngăn chặn triệt để đi xuyên qua nhau)
     for (let i = 0; i < cars.length; i++) {
       for (let j = i + 1; j < cars.length; j++) {
         const c1 = cars[i];
@@ -555,23 +609,40 @@ export class VehiclePhysicsSystem {
         const longitudinalDist = Math.abs(p1Dist - p2Dist);
         const lateralDist = Math.abs(c1.state.lateralOffset - c2.state.lateralOffset) * (trackWidth / 2);
 
-        if (longitudinalDist < 3.2 && lateralDist < 1.4) {
-          // Collision occurred!
+        // Kích thước chuẩn thân xe: dài 4.8m, rộng 2.1m
+        const MIN_LONG_DIST = 5.2; // Khoảng cách dọc an toàn tối thiểu
+        const MIN_LAT_DIST = 2.2;  // Khoảng cách ngang an toàn tối thiểu (rộng thân xe)
+
+        if (longitudinalDist < MIN_LONG_DIST && lateralDist < MIN_LAT_DIST) {
+          // Va chạm & Ngăn chặn triệt để đi xuyên qua nhau!
           collisionCarId = c1.state.id;
+          collisionCarPos = c1.group.position.clone();
+          collisionIntensity = Math.min(1.0, 0.45 + (Math.abs(c1.state.speed - c2.state.speed) / 55));
 
-          if (c1.state.collisionCooldown <= 0 && c2.state.collisionCooldown <= 0) {
-            c1.state.collisionCooldown = 0.8;
-            c2.state.collisionCooldown = 0.8;
+          // 1. ĐẨY LẠNG LÁCH TÁCH LÀN NGANG (Lateral Repulsion / Lạng lách tách làn lập tức)
+          const latOverlap = MIN_LAT_DIST - lateralDist;
+          const latPushAmount = (latOverlap / (trackWidth / 2)) * 0.65; // Đẩy dứt khoát sang 2 bên
+          const pushDir = c1.state.lateralOffset >= c2.state.lateralOffset ? 1 : -1;
+          
+          c1.state.lateralOffset = Math.max(-0.82, Math.min(0.82, c1.state.lateralOffset + pushDir * latPushAmount));
+          c2.state.lateralOffset = Math.max(-0.82, Math.min(0.82, c2.state.lateralOffset - pushDir * latPushAmount));
+          
+          // Cập nhật ngay targetLateralOffset để xe duy trì làn mới né tránh
+          c1.state.targetLateralOffset = c1.state.lateralOffset;
+          c2.state.targetLateralOffset = c2.state.lateralOffset;
 
-            // Phản lực tách làn mượt mà, không teleport giật cục
-            const pushDir = c1.state.lateralOffset > c2.state.lateralOffset ? 1 : -1;
-            const pushDelta = pushDir * Math.min(0.04, 0.4 * delta);
-            c1.state.lateralOffset = Math.max(-0.85, Math.min(0.85, c1.state.lateralOffset + pushDelta));
-            c2.state.lateralOffset = Math.max(-0.85, Math.min(0.85, c2.state.lateralOffset - pushDelta));
+          // 2. NGĂN CHẶN ĐI XUYÊN DỌC (Anti-Clipping Longitudinal Impenetrability)
+          // Xe chạy sau tuyệt đối KHÔNG ĐƯỢC đi xuyên qua đuôi xe chạy trước!
+          const trailingCar = p1Dist < p2Dist ? c1 : c2;
+          const leadingCar = p1Dist < p2Dist ? c2 : c1;
 
-            // Ma sát giảm tốc độ nhẹ tự nhiên khi va chạm
-            c1.state.speed *= 0.96;
-            c2.state.speed *= 0.96;
+          // Nếu khoảng cách ngang còn quá hẹp (< 1.8m), xe sau phải lách hoặc giữ khoảng cách sau xe trước, không được xuyên qua
+          if (lateralDist < 1.8) {
+            trailingCar.state.lapProgress = Math.max(0, leadingCar.state.lapProgress - (MIN_LONG_DIST / totalLength));
+            // Xe sau chủ động đánh lái lách sang làn khác để vượt
+            const steerAwayDir = trailingCar.state.lateralOffset > 0 ? -0.34 : 0.34;
+            trailingCar.state.targetLateralOffset = Math.max(-0.75, Math.min(0.75, trailingCar.state.lateralOffset + steerAwayDir));
+            trailingCar.state.speed = Math.min(trailingCar.state.speed, leadingCar.state.speed * 0.98);
           }
         }
       }
@@ -710,9 +781,14 @@ export class VehiclePhysicsSystem {
     });
 
     sorted.forEach((car, index) => {
-      car.state.rank = index + 1;
+      const newRank = index + 1;
+      // Khi một xe thăng hạng (vượt qua đối thủ phía trước trong vật lý đua xe):
+      if (car.state.rank && newRank < car.state.rank && !activeOvertakeCarId) {
+        activeOvertakeCarId = car.state.id;
+      }
+      car.state.rank = newRank;
     });
 
-    return { activeOvertakeCarId, collisionCarId };
+    return { activeOvertakeCarId, collisionCarId, collisionCarPos, collisionIntensity };
   }
 }

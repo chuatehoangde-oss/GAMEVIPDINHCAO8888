@@ -181,9 +181,12 @@ export interface AICarState {
   cooldownTimer?: number; // Giai đoạn hạ nhiệt/giảm tốc độ xuống 400-450 km/h để xe sau vượt
   baseCruiseSpeed?: number; // Tốc độ hành trình riêng biệt từng xe quanh mốc 500 km/h
   assignedLaneIndex?: number;
+  gear?: number;
+  previousGear?: number;
   rpm?: number;
   throttle?: number;
   isBraking?: boolean;
+  hasShiftPop?: boolean;
 }
 
 export interface InstanceSeedData {
