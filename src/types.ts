@@ -5,12 +5,12 @@ export type ResolutionPreset = '1080x1920 (Full HD Dọc)' | '720x1280 (HD Dọc
 export type AspectRatioOption = '9:16' | '16:9';
 export type VideoFileFormat = 'mp4' | 'mov' | 'webm';
 export type FPSOption = 30 | 60 | 120;
-export type VideoDurationPreset = 30 | 60 | 70 | 120 | number;
+export type VideoDurationPreset = 30 | 60 | 70 | 120 | 600 | 1200 | number;
 
 export enum CameraMode {
   // === CÁC GÓC QUAY TRUYỀN HÌNH TẬP TRUNG VÀO XE & NHIỀU XE ĐUA ===
-  TRACKSIDE_TELEPHOTO = 'TRACKSIDE_TELEPHOTO', // 1. Telephoto ven đường lia theo đoàn xe (85mm F1)
   PANORAMIC = 'PANORAMIC', // 2. Toàn Cảnh Trường Đua (Đài cao bao quát toàn cảnh khúc cua & nhiều xe đua)
+  HIGH_SPORTS_PANORAMA = 'HIGH_SPORTS_PANORAMA', // 2b. Toàn Cảnh Thể Thao Trên Cao (Góc trên cao chuẩn truyền hình quan sát toàn đoàn đua)
   CHOPPER_HELI_CHASE = 'CHOPPER_HELI_CHASE', // 3. Trực Thăng Truyền Hình (Helicam trên không quay Live show)
   SKY_DRONE_BROADCAST = 'SKY_DRONE_BROADCAST', // 4. Racing Drone / Flycam (Flycam bám sát xé gió)
   MULTI_CAR_FRONT_FACING = 'MULTI_CAR_FRONT_FACING', // 5. Đón đầu nhiều xe đua (Góc phía trước quay trực diện xe đang lao tới)
@@ -116,6 +116,60 @@ export type RoadLayoutType =
   | 'NEO_SHANGHAI_SKYWAY'
   | string;
 
+export type LampPoleType =
+  | 'curved_arch'
+  | 'double_cantilever'
+  | 'stadium_floodlight'
+  | 'minimalist_l'
+  | 'industrial_truss'
+  | 'cyber_disc'
+  | 'cobra_head'
+  | 'twin_y_fork'
+  | 'spiral_helix'
+  | 'pagoda_tier'
+  | 'gantry_bracket'
+  | 'windmill_blade'
+  | 'triple_lantern'
+  | 'neon_totem_pillar'
+  | 'chevron_arc'
+  | 'solar_wing'
+  | 'prism_obelisk'
+  | 'suspended_halo_rig'
+  | 'railgun_mast'
+  | 'crown_beacon';
+
+export type ArchStyleType =
+  | 'classic_gantry'
+  | 'gothic_pointed_arch'
+  | 'semi_circular_vault'
+  | 'double_deck_truss'
+  | 'v_wing_butterfly'
+  | 'hexagonal_portal'
+  | 'trapezoid_cyber_gate'
+  | 'suspension_cable_bridge'
+  | 'twin_spire_cathedral'
+  | 'chevron_inverted_v'
+  | 'circular_turbine_ring'
+  | 'cantilever_split_wings'
+  | 'truss_spaceframe_box'
+  | 'pagoda_eave_gate'
+  | 'stealth_monolith_frame'
+  | 'triple_rib_fin'
+  | 'diamond_crown_portal'
+  | 'curved_ribbon_wave'
+  | 'f1_pit_bridge'
+  | 'lightning_zigzag_arch'
+  | 'halo_sunburst_gate'
+  | 'twin_barrel_arcade'
+  | 'a_frame_pylon_span'
+  | 'floating_ring_gantry'
+  | 'stepped_art_deco'
+  | 'boomerang_arc'
+  | 'prism_crystal_vault'
+  | 'heavy_industrial_crane'
+  | 'tunnel_blade_louvers'
+  | 'championship_trophy_arch';
+
 export interface TrackBiome {
   id: string;
   name: string;
@@ -139,7 +193,8 @@ export interface TrackBiome {
   edgeLinePattern?: 'solid_white' | 'hazard_yellow' | 'neon_cyan' | 'double_edge';
   roadTextureType?: 'asphalt_dark' | 'tarmac_grey' | 'wet_reflection' | 'red_f1' | 'desert_clay' | 'cyber_midnight' | 'alpine_ice';
   lampColor?: number;
-  lampPoleType?: 'curved_arch' | 'double_cantilever' | 'stadium_floodlight' | 'minimalist_l' | 'industrial_truss' | 'cyber_disc';
+  lampPoleType?: LampPoleType;
+  archType?: ArchStyleType;
   poleColor?: number;
   bollardReflectorColor?: number;
   bollardBodyColor?: number;
@@ -236,9 +291,31 @@ export interface VideoRecordJob {
   timestamp: string;
   seed: number;
   biomeName: string;
+  biomeId?: string;
+  roadLayout?: RoadLayoutType;
+  carsCount?: number;
+  carsSnapshot?: Array<{
+    id: string;
+    name: string;
+    driverName?: string;
+    type: AICarState['type'];
+    color: string;
+    hexColor: number;
+    rank: number;
+  }>;
+  aiAggression?: number;
+  cinematicAutoDirector?: boolean;
+  fileFormat?: VideoFileFormat;
+  altAspectBlobs?: Partial<Record<AspectRatioOption, {
+    blob: Blob;
+    url: string;
+    fileName: string;
+    sizeMB: number;
+  }>>;
   winnerCar: string;
   topSpeedKmh: number;
   resolution: ResolutionPreset;
+  aspectRatio?: AspectRatioOption;
   fps: number;
   status?: 'processing' | 'ready' | 'failed';
   progressPercent?: number;

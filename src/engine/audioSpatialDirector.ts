@@ -318,17 +318,9 @@ export class AudioSpatialDirector {
         base.flybySensitivity = 0.80;
         break;
 
-      // 3. TELEPHOTO VEN ĐƯỜNG 85mm F1 (Long distance silence -> massive Doppler frequency shift -> sonic whoosh)
-      case CameraMode.TRACKSIDE_TELEPHOTO:
-        base.isTrackside = true;
-        base.flybySensitivity = 1.0;
-        base.crowdBleedVol = 0.36;
-        base.windVolume = 0.12;
-        base.masterEqPreset = 'neutral';
-        break;
-
       // 4. TOÀN CẢNH TRƯỜNG ĐUA (Broad panoramic ambient echo, stadium cheers & horns, distant pack roar)
       case CameraMode.PANORAMIC:
+      case CameraMode.HIGH_SPORTS_PANORAMA:
       case 'GRANDSTAND_PANORAMIC':
       case 'SATELLITE_ORBIT':
         base.isTrackside = true;

@@ -1116,20 +1116,29 @@ export class AudioEngine {
     seed: number = 632585,
     biome?: TrackBiome | string,
     weather?: WeatherType | string,
-    carsCount: number = 15
+    carsCount: number = 15,
+    lang: 'vi' | 'en' = 'vi',
+    driversList?: string[],
+    trackName?: string
   ): { left: Float32Array; right: Float32Array; totalSamples: number; timeline: ScheduledCommentaryEvent[] } {
     const totalSamples = Math.floor(durationSeconds * sampleRate);
     const left = new Float32Array(totalSamples);
     const right = new Float32Array(totalSamples);
 
     // Kịch bản bình luận viên
-    const timeline = commentarySoundManager.getTimelineForInstance(instanceId, seed, durationSeconds);
+    const timeline = commentarySoundManager.getTimelineForInstance(
+      instanceId,
+      seed,
+      durationSeconds,
+      lang,
+      driversList,
+      trackName
+    );
     const ambienceType = audioSpatialDirector.resolveBiomeAmbience(biome, weather);
 
     // Chu kỳ các góc quay Camera Director (5.5 giây / góc) - Loại bỏ hoàn toàn BEHIND và LOW_GROUND
     const CAMERA_MODES_CYCLE: CameraMode[] = [
       CameraMode.CHOPPER_HELI_CHASE,
-      CameraMode.TRACKSIDE_TELEPHOTO,
       CameraMode.MULTI_CAR_PACK_CHASE,
       CameraMode.COCKPIT_FIRST_PERSON,
       CameraMode.TRACKSIDE_APEX,
@@ -1148,7 +1157,8 @@ export class AudioEngine {
       CameraMode.SIDE_PROFILE,
       CameraMode.LEADER_TRACKING,
       CameraMode.CINEMATIC_ORBIT,
-      CameraMode.PANORAMIC
+      CameraMode.PANORAMIC,
+      CameraMode.HIGH_SPORTS_PANORAMA
     ];
 
     // Khởi tạo trạng thái dao động các xe đua (Đồng bộ chuẩn 100% với Web Audio Engine trực tiếp)
@@ -1414,6 +1424,156 @@ export class AudioEngine {
   }
 
   /**
+   * Phiên bản bất đồng bộ nhường luồng (Non-blocking Cooperative Yield) cho tổng hợp PCM dài 60s-1200s
+   */
+  async generateRacingAudioPCMAsync(
+    durationSeconds: number,
+    sampleRate: number = 44100,
+    instanceId: number = 1,
+    seed: number = 632585,
+    biome?: TrackBiome | string,
+    weather?: WeatherType | string,
+    carsCount: number = 15,
+    lang: 'vi' | 'en' = 'vi',
+    driversList?: string[],
+    trackName?: string
+  ): Promise<{ left: Float32Array; right: Float32Array; totalSamples: number; timeline: ScheduledCommentaryEvent[] }> {
+    const chunkedStep = 8192;
+    const totalSamples = Math.floor(durationSeconds * sampleRate);
+    const left = new Float32Array(totalSamples);
+    const right = new Float32Array(totalSamples);
+    const timeline = commentarySoundManager.getTimelineForInstance(
+      instanceId,
+      seed,
+      durationSeconds,
+      lang,
+      driversList,
+      trackName
+    );
+    const ambienceType = audioSpatialDirector.resolveBiomeAmbience(biome, weather);
+    const CAMERA_MODES_CYCLE: CameraMode[] = [
+      CameraMode.CHOPPER_HELI_CHASE,
+      CameraMode.MULTI_CAR_PACK_CHASE,
+      CameraMode.COCKPIT_FIRST_PERSON,
+      CameraMode.TRACKSIDE_APEX,
+      CameraMode.MULTI_CAR_FRONT_FACING,
+      CameraMode.WING_REAR_LOOK,
+      CameraMode.PIT_WALL_BROADCAST,
+      CameraMode.PASSING_STATIONARY,
+      CameraMode.HOOD,
+      CameraMode.TUNNEL_CEILING_FAST,
+      CameraMode.VERTICAL_PORTRAIT_OPTIMIZED,
+      CameraMode.SPECTATOR_TRACKSIDE,
+      CameraMode.FENDER_WHEEL_LOOK,
+      CameraMode.KERB_CAM_GROUND,
+      CameraMode.BUMPER_FIRST_PERSON,
+      CameraMode.OVERTAKE_ACTION,
+      CameraMode.SIDE_PROFILE,
+      CameraMode.LEADER_TRACKING,
+      CameraMode.CINEMATIC_ORBIT,
+      CameraMode.PANORAMIC,
+      CameraMode.HIGH_SPORTS_PANORAMA
+    ];
+
+    const numCars = Math.max(15, carsCount);
+    const carPhases1 = new Float32Array(numCars);
+    const carPhases2 = new Float32Array(numCars);
+    const carSubPhases = new Float32Array(numCars);
+    const carBaseFreqs = new Float32Array(numCars);
+    const carLanes = new Float32Array(numCars);
+
+    for (let c = 0; c < numCars; c++) {
+      carLanes[c] = ((c % 3) - 1.0) * 0.65;
+      carBaseFreqs[c] = 72 + ((c * 17 + (seed % 23)) % 52);
+    }
+
+    let ambFilterL = 0;
+    let ambFilterR = 0;
+    let heliPhase = 0;
+    let lastYieldMs = performance.now();
+
+    for (let i = 0; i < totalSamples; i++) {
+      const t = i / sampleRate;
+      let activeCommentary: ScheduledCommentaryEvent | null = null;
+      for (const evt of timeline) {
+        if (t >= evt.startSec && t < evt.startSec + evt.durationSec) {
+          activeCommentary = evt;
+          break;
+        }
+      }
+      const duckMultiplier = activeCommentary ? 0.84 : 1.0;
+      const camIdx = Math.floor(t / 5.5) % CAMERA_MODES_CYCLE.length;
+      const persp = audioSpatialDirector.getCameraPerspective(CAMERA_MODES_CYCLE[camIdx], 420);
+
+      let mixLeft = 0;
+      let mixRight = 0;
+
+      for (let c = 0; c < Math.min(10, numCars); c++) {
+        const carCycle = (t + c * 0.42) % 4.6;
+        const rpmNorm = carCycle < 3.2 ? 0.68 + (carCycle / 3.2) * 0.32 : 0.65;
+        const throttle = carCycle < 3.2 ? 0.95 : 0.55;
+        const engineHz = carBaseFreqs[c] + rpmNorm * 250;
+
+        carPhases1[c] += (2 * Math.PI * engineHz) / sampleRate;
+        carPhases2[c] += (2 * Math.PI * engineHz * 0.502) / sampleRate;
+        carSubPhases[c] += (2 * Math.PI * 48) / sampleRate;
+        if (carPhases1[c] > 2 * Math.PI) carPhases1[c] -= 2 * Math.PI;
+        if (carPhases2[c] > 2 * Math.PI) carPhases2[c] -= 2 * Math.PI;
+        if (carSubPhases[c] > 2 * Math.PI) carSubPhases[c] -= 2 * Math.PI;
+
+        const saw = (carPhases1[c] / Math.PI) - 1.0;
+        const tri = Math.abs((carPhases2[c] / Math.PI) - 1.0) * 2 - 1.0;
+        const sub = Math.sin(carSubPhases[c]) * 0.35;
+        const raw = saw * 0.55 + tri * 0.30 + sub * 0.15;
+
+        const carVol = (c === 0 ? 0.85 : (0.36 / (1.0 + c * 0.25))) * throttle;
+        const carPan = Math.max(-0.85, Math.min(0.85, carLanes[c] + Math.sin(t * 0.85 + c) * 0.22));
+        mixLeft += raw * carVol * 0.5 * (1 - carPan);
+        mixRight += raw * carVol * 0.5 * (1 + carPan);
+      }
+
+      if (persp.isHelicopter) {
+        heliPhase += (2 * Math.PI * persp.helicopterRotorFreq) / sampleRate;
+        if (heliPhase > 2 * Math.PI) heliPhase -= 2 * Math.PI;
+        const heliSound = Math.pow(Math.max(0, Math.sin(heliPhase)), 4) * 0.3 * (persp.helicopterRotorVol * 1.2);
+        mixLeft += heliSound;
+        mixRight += heliSound;
+      }
+
+      let amb = (Math.random() * 2 - 1) * 0.03;
+      if (ambienceType === 'RAIN' || ambienceType === 'THUNDERSTORM') {
+        amb = (Math.random() * 2 - 1) * 0.07;
+      }
+      ambFilterL += 0.15 * (amb - ambFilterL);
+      ambFilterR += 0.15 * (amb - ambFilterR);
+      mixLeft = (mixLeft + ambFilterL) * duckMultiplier;
+      mixRight = (mixRight + ambFilterR) * duckMultiplier;
+
+      let finalLeft = mixLeft * 1.1;
+      let finalRight = mixRight * 1.1;
+
+      if (activeCommentary && activeCommentary.pcmLeft) {
+        const offsetSec = t - activeCommentary.startSec;
+        const sampleIdx = Math.floor(offsetSec * (activeCommentary.sampleRate || sampleRate));
+        if (sampleIdx >= 0 && sampleIdx < activeCommentary.pcmLeft.length) {
+          finalLeft += activeCommentary.pcmLeft[sampleIdx] * 1.3;
+          finalRight += (activeCommentary.pcmRight ? activeCommentary.pcmRight[sampleIdx] : activeCommentary.pcmLeft[sampleIdx]) * 1.3;
+        }
+      }
+
+      left[i] = Math.tanh(finalLeft * 0.95) * 0.92;
+      right[i] = Math.tanh(finalRight * 0.95) * 0.92;
+
+      if ((i & (chunkedStep - 1)) === 0 && performance.now() - lastYieldMs >= 6) {
+        await new Promise(r => setTimeout(r, 0));
+        lastYieldMs = performance.now();
+      }
+    }
+
+    return { left, right, totalSamples, timeline };
+  }
+
+  /**
    * Kết xuất âm thanh CHUẨN XÁC 100% của từng Luồng Game riêng biệt cho Video tải xuống
    * Sử dụng OfflineAudioContext C++ của trình duyệt với toàn bộ đồ thị Web Audio DSP:
    * 5 Voices xe cận cảnh + Tiếng gầm bầy đàn + Tiếng rít lốp + Gờ kerb + Gió khí động + Foley Camera + BLV + Limiter
@@ -1427,10 +1587,19 @@ export class AudioEngine {
     seed: number = 632585,
     biome?: TrackBiome | string,
     weather?: WeatherType | string,
-    lang: 'vi' | 'en' = 'vi'
+    lang: 'vi' | 'en' = 'vi',
+    driversList?: string[],
+    trackName?: string
   ): Promise<{ left: Float32Array; right: Float32Array; totalSamples: number }> {
     const totalSamples = Math.floor(durationSeconds * sampleRate);
-    const timeline = commentarySoundManager.getTimelineForInstance(instanceId, seed, durationSeconds, lang);
+    const timeline = commentarySoundManager.getTimelineForInstance(
+      instanceId,
+      seed,
+      durationSeconds,
+      lang,
+      driversList,
+      trackName
+    );
 
     if (typeof OfflineAudioContext !== 'undefined' && telemetry && telemetry.length > 0) {
       try {
@@ -1697,17 +1866,35 @@ export class AudioEngine {
           }
         }
 
-        // 11. Automate graph parameters along the exact 60 FPS frame telemetry of THIS instance
+        // 11. Automate graph parameters along the frame telemetry of THIS instance
+        // Đối với chặng đua dài (600s / 1200s), tự động giãn nhịp keyframe WebAudio để giữ bộ nhớ ổn định mà vẫn giữ nguyên 100% sự kiện flyby/va chạm
+        const automationStride = telemetry.length > 3600 ? Math.max(1, Math.floor(telemetry.length / 2400)) : 1;
         let lastEventTime = -0.001;
         let lastOfflineCollisionT = -10.0;
+        let isFirstAutomated = true;
+        let lastAutoYieldMs = performance.now();
         for (let k = 0; k < telemetry.length; k++) {
           const frame = telemetry[k];
-          let t = (k / telemetry.length) * (durationSeconds - 0.005);
-          if (k > 0 && t <= lastEventTime) {
+          let t = Number.isFinite(frame.timeSec)
+            ? Math.min(durationSeconds - 0.005, Math.max(0, frame.timeSec))
+            : (k / telemetry.length) * (durationSeconds - 0.005);
+          if (t <= lastEventTime) {
             t = lastEventTime + 0.0001;
           }
+
+          const shouldAutomateContinuous = (k === 0 || k === telemetry.length - 1 || k % automationStride === 0);
+          const hasDiscreteEvent = Boolean(frame.collisionCarId || frame.activeOvertakeCarId);
+          if (!shouldAutomateContinuous && !hasDiscreteEvent) {
+            continue;
+          }
           lastEventTime = t;
-          const isFirstFrame = (k === 0);
+          const isFirstFrame = isFirstAutomated;
+          isFirstAutomated = false;
+
+          if (k % 120 === 0 && performance.now() - lastAutoYieldMs >= 6) {
+            await new Promise(r => setTimeout(r, 0));
+            lastAutoYieldMs = performance.now();
+          }
 
           const autoVal = (param: AudioParam, val: number) => {
             if (isFirstFrame) {
@@ -1903,20 +2090,20 @@ export class AudioEngine {
     }
 
     // Dự phòng khi OfflineAudioContext không khả dụng: tính toán DSP trực tiếp từ telemetry của chính luồng đó
-    return this.renderInstanceAudioPCMFromTelemetry(telemetry, durationSeconds, sampleRate, timeline, biome, weather);
+    return await this.renderInstanceAudioPCMFromTelemetry(telemetry, durationSeconds, sampleRate, timeline, biome, weather);
   }
 
   /**
-   * Tính toán DSP trực tiếp từ telemetry thực tế của luồng đua (dự phòng chính xác cao)
+   * Tính toán DSP trực tiếp từ telemetry thực tế của luồng đua (dự phòng chính xác cao, nhường luồng theo slice)
    */
-  private renderInstanceAudioPCMFromTelemetry(
+  private async renderInstanceAudioPCMFromTelemetry(
     telemetry: InstanceTelemetrySnapshot[],
     durationSeconds: number,
     sampleRate: number,
     timeline: ScheduledCommentaryEvent[],
     biome?: TrackBiome | string,
     weather?: WeatherType | string
-  ): { left: Float32Array; right: Float32Array; totalSamples: number } {
+  ): Promise<{ left: Float32Array; right: Float32Array; totalSamples: number }> {
     const totalSamples = Math.floor(durationSeconds * sampleRate);
     const left = new Float32Array(totalSamples);
     const right = new Float32Array(totalSamples);
@@ -1960,13 +2147,22 @@ export class AudioEngine {
       };
     });
 
+    let telemetryCursor = 0;
+    let lastFallbackYieldMs = performance.now();
+
     for (let i = 0; i < totalSamples; i++) {
       const t = i / sampleRate;
 
-      // Tìm frame telemetry tương ứng với thời điểm t - Khóa pha chính xác 100%, loại bỏ hoàn toàn độ trôi dạt
-      const frameIdx = telemetry && telemetry.length > 0
-        ? Math.min(telemetry.length - 1, Math.max(0, Math.floor((t / durationSeconds) * telemetry.length)))
-        : -1;
+      // Tìm frame telemetry tương ứng với thời điểm t theo timeSec thực tế
+      if (telemetry && telemetry.length > 0) {
+        while (
+          telemetryCursor + 1 < telemetry.length &&
+          telemetry[telemetryCursor + 1].timeSec <= t
+        ) {
+          telemetryCursor++;
+        }
+      }
+      const frameIdx = telemetry && telemetry.length > 0 ? telemetryCursor : -1;
       const frameData = frameIdx >= 0 && frameAcoustics[frameIdx] ? frameAcoustics[frameIdx] : null;
       const persp = frameData ? frameData.persp : audioSpatialDirector.getCameraPerspective(CameraMode.CHOPPER_HELI_CHASE, 420);
 
@@ -2068,6 +2264,11 @@ export class AudioEngine {
       // Master output với ducking và Soft Limiter
       left[i] = Math.tanh((mixLeft * duckMultiplier + commL) * 0.95) * 0.92;
       right[i] = Math.tanh((mixRight * duckMultiplier + commR) * 0.95) * 0.92;
+
+      if ((i & 16383) === 0 && performance.now() - lastFallbackYieldMs >= 6) {
+        await new Promise(r => setTimeout(r, 0));
+        lastFallbackYieldMs = performance.now();
+      }
     }
 
     return { left, right, totalSamples };

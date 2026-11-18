@@ -97,8 +97,10 @@ export function getTrackVisualTheme(layoutKey?: string): TrackVisualTheme {
 }
 
 import * as THREE from 'three';
+import { createSeededPRNG } from '../utils/prng';
 
-export function createRoadTexture(theme: TrackVisualTheme): THREE.CanvasTexture {
+export function createRoadTexture(theme: TrackVisualTheme, seed: number = 42): THREE.CanvasTexture {
+  const rng = createSeededPRNG(seed, 5150);
   const canvas = document.createElement('canvas');
   canvas.width = 512;
   canvas.height = 512;
@@ -111,12 +113,12 @@ export function createRoadTexture(theme: TrackVisualTheme): THREE.CanvasTexture 
   ctx.fillStyle = hexStr;
   ctx.fillRect(0, 0, 512, 512);
 
-  // Asphalt asphalt noise texture
+  // Asphalt seeded noise texture
   for (let i = 0; i < 4000; i++) {
-    const x = Math.random() * 512;
-    const y = Math.random() * 512;
-    const alpha = Math.random() * 0.08;
-    ctx.fillStyle = Math.random() > 0.5 ? `rgba(255,255,255,${alpha})` : `rgba(0,0,0,${alpha})`;
+    const x = rng.next() * 512;
+    const y = rng.next() * 512;
+    const alpha = rng.next() * 0.08;
+    ctx.fillStyle = rng.next() > 0.5 ? `rgba(255,255,255,${alpha})` : `rgba(0,0,0,${alpha})`;
     ctx.fillRect(x, y, 2, 2);
   }
 
@@ -199,8 +201,21 @@ export function getTrack30ColorAtProgress(progress: number): THREE.Color {
  * Mỗi luồng chạy là 1 màu riêng biệt rực rỡ, toàn bộ con đường mang 1 màu đồng nhất sáng đẹp
  */
 export function getTrackColorForInstance(instanceId: number = 1, seed: number = 0): { name: string; hex: number } {
-  const idOffset = Math.max(0, instanceId - 1);
-  const colorIndex = (idOffset + Math.abs(seed)) % TRACK_30_COLORS.length;
-  return TRACK_30_COLORS[colorIndex];
+  const rng = createSeededPRNG(seed || 101, instanceId * 7919 + 17);
+  const base = TRACK_30_COLORS[rng.int(0, TRACK_30_COLORS.length - 1)];
+  const col = new THREE.Color(base.hex);
+  const hsl = { h: 0, s: 0, l: 0 };
+  col.getHSL(hsl);
+
+  // Dịch chuyển sắc độ HSL liên tục theo seed -> hàng chục nghìn sắc thái mặt đường rực rỡ độc bản
+  const shiftedH = ((hsl.h + rng.float(-0.08, 0.08)) % 1 + 1) % 1;
+  const shiftedS = Math.max(0.62, Math.min(0.96, hsl.s + rng.float(-0.1, 0.12)));
+  const shiftedL = Math.max(0.38, Math.min(0.62, hsl.l + rng.float(-0.08, 0.08)));
+  col.setHSL(shiftedH, shiftedS, shiftedL);
+
+  return {
+    name: `${base.name} #${rng.int(100, 999)}`,
+    hex: col.getHex()
+  };
 }
 

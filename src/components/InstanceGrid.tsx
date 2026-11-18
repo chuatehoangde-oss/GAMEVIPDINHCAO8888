@@ -1,12 +1,13 @@
 import React, { RefObject } from 'react';
 import { Camera, Maximize2, Radio, Trophy, Gauge, Compass, Sparkles, ChevronRight } from 'lucide-react';
-import { CameraMode, InstanceRuntime } from '../types';
+import { AspectRatioOption, CameraMode, InstanceRuntime } from '../types';
 import { ROAD_LAYOUT_PRESETS } from '../engine/scenarioGenerator';
 
 interface InstanceGridProps {
   canvasRef: RefObject<HTMLCanvasElement | null>;
   instances: InstanceRuntime[];
   activeCount: number;
+  aspectRatio?: AspectRatioOption;
   onInspectInstance: (instanceId: number) => void;
   onQuickSwitchCamera?: (instanceId: number, mode: CameraMode) => void;
 }
@@ -15,9 +16,11 @@ export const InstanceGrid: React.FC<InstanceGridProps> = ({
   canvasRef,
   instances,
   activeCount,
+  aspectRatio = '9:16',
   onInspectInstance,
   onQuickSwitchCamera
 }) => {
+  const isLandscape = aspectRatio === '16:9';
   // Bố cục lưới dựa theo số instance kích hoạt
   const getGridColsClass = (count: number) => {
     switch (count) {
@@ -49,10 +52,10 @@ export const InstanceGrid: React.FC<InstanceGridProps> = ({
     CameraMode.CHOPPER_HELI_CHASE,
     CameraMode.SKY_DRONE_BROADCAST,
     CameraMode.PANORAMIC,
+    CameraMode.HIGH_SPORTS_PANORAMA,
     CameraMode.MULTI_CAR_FRONT_FACING,
     CameraMode.MULTI_CAR_OVERTAKE_WIDE,
     CameraMode.MULTI_CAR_PACK_CHASE,
-    CameraMode.TRACKSIDE_TELEPHOTO,
     CameraMode.BEHIND,
     CameraMode.TRACKSIDE_APEX,
     CameraMode.PIT_WALL_BROADCAST,
@@ -86,12 +89,12 @@ export const InstanceGrid: React.FC<InstanceGridProps> = ({
       case CameraMode.CHOPPER_HELI_CHASE: return 'Trực Thăng Truyền Hình';
       case CameraMode.SKY_DRONE_BROADCAST: return 'Drone Bay Siêu Tốc';
       case CameraMode.PANORAMIC: return 'Toàn Cảnh Trên Cao';
+      case CameraMode.HIGH_SPORTS_PANORAMA: return 'Toàn Cảnh Thể Thao Cao';
       case CameraMode.BEHIND: return 'Phía Sau Xe 100m';
       case CameraMode.MULTI_CAR_PACK_CHASE: return 'Bám Đuôi Đoàn Xe 100m';
       case CameraMode.MULTI_CAR_FRONT_FACING: return 'Đón Đầu Nhiều Xe';
       case CameraMode.MULTI_CAR_OVERTAKE_WIDE: return 'Toàn Cảnh So Kè Nhiều Xe';
       case CameraMode.SIDE_CHASE_MULTI: return 'Hông Xa So Kè Nhóm Xe';
-      case CameraMode.TRACKSIDE_TELEPHOTO: return 'Telephoto Lia Xe (85mm)';
       case CameraMode.TRACKSIDE_APEX: return 'Mép Cua Apex Đón Xe';
       case CameraMode.PIT_WALL_BROADCAST: return 'Vách Pit Wall Lia Xe';
       case CameraMode.PASSING_STATIONARY: return 'Ven Rào Xé Gió';
@@ -152,17 +155,22 @@ export const InstanceGrid: React.FC<InstanceGridProps> = ({
           return (
             <div
               key={instance.id}
-              className="flex items-center justify-center w-full h-full min-h-0 overflow-hidden pointer-events-none"
+              className="flex items-center justify-center w-full h-full min-h-0 overflow-hidden pointer-events-none [container-type:size]"
             >
               <div
                 id={`viewport-tile-${instance.id}`}
-                className="relative aspect-[9/16] h-full max-h-full max-w-full rounded-2xl border-2 border-slate-700/80 overflow-hidden bg-transparent flex flex-col justify-between p-2 shadow-2xl pointer-events-auto group hover:border-cyan-400/90 transition-all ring-1 ring-white/10"
+                style={
+                  isLandscape
+                    ? { width: 'min(100cqw, calc(100cqh * 16 / 9))', height: 'min(100cqh, calc(100cqw * 9 / 16))' }
+                    : { width: 'min(100cqw, calc(100cqh * 9 / 16))', height: 'min(100cqh, calc(100cqw * 16 / 9))' }
+                }
+                className="relative rounded-2xl border-2 border-slate-700/80 overflow-hidden bg-transparent flex flex-col justify-between p-2 shadow-2xl pointer-events-auto group hover:border-cyan-400/90 transition-all ring-1 ring-white/10"
               >
                 {/* Lớp Gradient bảo đảm chữ luôn đọc rõ nét */}
-                <div className="absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-black/85 via-black/45 to-transparent pointer-events-none -z-10" />
-                <div className="absolute inset-x-0 bottom-0 h-36 bg-gradient-to-t from-black/90 via-black/55 to-transparent pointer-events-none -z-10" />
+                <div className={`absolute inset-x-0 top-0 ${isLandscape ? 'h-24' : 'h-32'} bg-gradient-to-b from-black/85 via-black/45 to-transparent pointer-events-none -z-10`} />
+                <div className={`absolute inset-x-0 bottom-0 ${isLandscape ? 'h-28' : 'h-36'} bg-gradient-to-t from-black/90 via-black/55 to-transparent pointer-events-none -z-10`} />
 
-                {/* Thanh thông tin phía trên - Chuẩn Video Dọc 9:16 */}
+                {/* Thanh thông tin phía trên - Đồng bộ 16:9 Ngang & 9:16 Dọc */}
                 <div className="flex flex-col gap-1 z-10">
                   <div className="flex items-center justify-between">
                     {/* Badge Luồng & Định dạng */}
@@ -170,8 +178,8 @@ export const InstanceGrid: React.FC<InstanceGridProps> = ({
                       <span className="px-1.5 py-0.5 rounded bg-cyan-500/30 text-cyan-300 font-mono text-[9px] font-bold border border-cyan-500/40 shadow-sm">
                         LUỒNG #{instance.id.toString().padStart(2, '0')}
                       </span>
-                      <span className="px-1 py-0.5 rounded bg-slate-900/80 text-emerald-400 font-mono text-[9px] font-semibold border border-slate-700">
-                        9:16 HD
+                      <span className={`px-1 py-0.5 rounded bg-slate-900/80 font-mono text-[9px] font-semibold border border-slate-700 ${isLandscape ? 'text-sky-400' : 'text-emerald-400'}`}>
+                        {isLandscape ? '16:9 HD' : '9:16 HD'}
                       </span>
                     </div>
 
@@ -281,9 +289,9 @@ export const InstanceGrid: React.FC<InstanceGridProps> = ({
                   </div>
                 </div>
 
-                {/* Driver List Overlay - Professional Broadcast Starting Grid from Second 3 to Second 6 (Hiển thị đầy đủ tất cả tay đua, ví dụ 15 xe thì hiện đủ 15 tay đua) */}
+                {/* Driver List Overlay - Professional Broadcast Starting Grid from Second 3 to Second 6 */}
                 {instance.chunkTimeElapsed >= 3.0 && instance.chunkTimeElapsed <= 6.0 && (
-                  <div className="absolute top-2 left-2 w-[245px] sm:w-[275px] max-h-[90%] bg-slate-950/95 backdrop-blur-md z-40 p-2 flex flex-col rounded-lg border border-cyan-500/40 shadow-2xl animate-fade-in font-sans pointer-events-none">
+                  <div className={`absolute top-2 left-2 ${isLandscape ? 'w-[320px] sm:w-[400px] max-w-[92%]' : 'w-[245px] sm:w-[275px]'} max-h-[90%] bg-slate-950/95 backdrop-blur-md z-40 p-2 flex flex-col rounded-lg border border-cyan-500/40 shadow-2xl animate-fade-in font-sans pointer-events-none`}>
                     <div className="mb-1.5 border-b border-cyan-500/30 pb-1 shrink-0">
                       <div className="text-[7.5px] font-mono tracking-[0.1em] text-cyan-400 font-bold uppercase flex items-center gap-1">
                         <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
@@ -297,7 +305,7 @@ export const InstanceGrid: React.FC<InstanceGridProps> = ({
                       </p>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-x-1.5 gap-y-0.5 overflow-y-auto max-h-[195px] pr-0.5">
+                    <div className={`grid ${isLandscape ? 'grid-cols-3' : 'grid-cols-2'} gap-x-1.5 gap-y-0.5 overflow-y-auto ${isLandscape ? 'max-h-[150px]' : 'max-h-[195px]'} pr-0.5`}>
                       {instance.cars.map((car, idx) => {
                         const bgHex = car.hexColor !== undefined
                           ? `#${car.hexColor.toString(16).padStart(6, '0')}`

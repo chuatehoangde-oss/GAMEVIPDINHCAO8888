@@ -22,6 +22,7 @@ import {
   CONSEQUENCES_VI,
   CONSEQUENCES_EN
 } from './storylineTwistsAndPunishments';
+import { createSeededPRNG } from '../utils/prng';
 
 export {
   STAR_DRIVERS,
@@ -166,34 +167,81 @@ export function getStorylineByIndex(index: number): HilariousRaceStoryline {
 }
 
 /**
- * Lấy cốt truyện ngẫu nhiên theo race seed hoặc instance ID (cho commentaryGenerator)
+ * Sinh cốt truyện tổ hợp không giới hạn (> 75,000,000 biến thể độc bản)
+ * trực tiếp theo Seed + danh sách tay đua thực tế của từng cuộc đua
  */
-export function getRaceStoryline(seed: number, lang: 'vi' | 'en' = 'vi'): {
+export function getRaceStoryline(
+  seed: number,
+  lang: 'vi' | 'en' = 'vi',
+  raceDrivers?: string[]
+): {
   id: string;
   index: number;
   title: string;
   premise: string;
   hook: string;
+  twist: string;
   category: string;
   protagonist: string;
   antagonist: string;
+  thirdDriver: string;
   secondaryCharacter: string;
   consequence: string;
 } {
-  const mappedIndex = (Math.abs(Math.floor(seed * 73 + 19)) % TOTAL_STORYLINES) + 1;
-  const s = getStorylineByIndex(mappedIndex);
+  const rng = createSeededPRNG(seed, 918273);
+
+  const rawPool = raceDrivers && raceDrivers.length >= 2
+    ? Array.from(new Set(raceDrivers.filter(Boolean)))
+    : STAR_DRIVERS;
+  const shuffledPool = rng.shuffle(rawPool);
+
+  const protagonist = shuffledPool[0] || rng.pick(STAR_DRIVERS);
+  let antagonist = shuffledPool[1] || rng.pick(STAR_DRIVERS);
+  if (antagonist === protagonist) {
+    antagonist = STAR_DRIVERS.find(d => d !== protagonist) || 'Lionel Messi';
+  }
+  const thirdDriver =
+    shuffledPool[2] ||
+    STAR_DRIVERS.find(d => d !== protagonist && d !== antagonist) ||
+    'Neymar Jr.';
+
+  const secChar = rng.pick(SECONDARY_CHARACTERS);
+  const baseInc = rng.pick(INCITING_INCIDENTS);
+  const twistIdx = rng.int(0, TRACK_TWISTS_VI.length - 1);
+  const consIdx = rng.int(0, CONSEQUENCES_VI.length - 1);
+
+  const twist = lang === 'en' ? TRACK_TWISTS_EN[twistIdx] : TRACK_TWISTS_VI[twistIdx];
+  const consequence = lang === 'en' ? CONSEQUENCES_EN[consIdx] : CONSEQUENCES_VI[consIdx];
+  const secName = lang === 'en' ? secChar.nameEn : secChar.nameVi;
+  const secRole = lang === 'en' ? secChar.roleEn : secChar.roleVi;
+  const catObj = STORYLINE_CATEGORIES.find(c => c.id === baseInc.cat) || STORYLINE_CATEGORIES[1];
+
+  const storyNum = Math.abs(Math.floor(seed)) % 9999999 + 1;
+  const title = lang === 'en'
+    ? `#${storyNum}: ${baseInc.titleEn} - ${protagonist} vs ${antagonist}`
+    : `#${storyNum}: ${baseInc.titleVi} - ${protagonist} vs ${antagonist}`;
+
+  const premise = lang === 'en'
+    ? `${baseInc.descEn(protagonist, antagonist, secName)} Complicated by ${secName} (${secRole}). Twist: ${twist} While ${thirdDriver} stalks from P3, the loser ${consequence}!`
+    : `${baseInc.descVi(protagonist, antagonist, secName)} Có sự can thiệp của ${secName} (${secRole}). Biến cố: ${twist} Trong lúc ${thirdDriver} rình rập phía sau, kẻ thua cuộc ${consequence}!`;
+
+  const hook = lang === 'en'
+    ? `[STORY #${storyNum}] ${baseInc.hookEn} ${protagonist} and ${antagonist} duel fiercely as ${thirdDriver} closes in under ${secName}'s watch!`
+    : `[KỊCH BẢN #${storyNum}] ${baseInc.hookVi} ${protagonist} và ${antagonist} so kè từng phân trong khi ${thirdDriver} áp sát ngay sau lưng dưới sự giám sát của ${secName}!`;
 
   return {
-    id: s.id,
-    index: s.index,
-    title: lang === 'en' ? s.titleEn : s.titleVi,
-    premise: lang === 'en' ? s.premiseEn : s.premiseVi,
-    hook: lang === 'en' ? s.commentaryHookEn : s.commentaryHookVi,
-    category: lang === 'en' ? s.categoryEn : s.categoryVi,
-    protagonist: s.protagonist,
-    antagonist: s.antagonist,
-    secondaryCharacter: lang === 'en' ? s.secondaryCharacterEn : s.secondaryCharacter,
-    consequence: lang === 'en' ? s.consequenceEn : s.consequenceVi
+    id: `story_${seed}`,
+    index: storyNum,
+    title,
+    premise,
+    hook,
+    twist,
+    category: lang === 'en' ? catObj.nameEn : catObj.nameVi,
+    protagonist,
+    antagonist,
+    thirdDriver,
+    secondaryCharacter: secName,
+    consequence
   };
 }
 

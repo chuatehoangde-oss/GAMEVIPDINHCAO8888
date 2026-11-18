@@ -45,6 +45,9 @@ export default function App() {
     cinematicAutoDirector: true
   });
 
+  const configRef = useRef<SystemConfig>(config);
+  configRef.current = config;
+
   const [selectedDirectoryName, setSelectedDirectoryName] = useState<string>('');
 
   // Trạng thái chạy của hệ thống
@@ -142,23 +145,27 @@ export default function App() {
       }
     });
 
-    // Xử lý sự kiện khi một instance hoàn thành chu kỳ chặng đua (30s / 60s / 120s)
+    // Xử lý sự kiện khi một instance hoàn thành chu kỳ chặng đua (30s / 60s / 120s / 600s / 1200s)
     engine.onChunkCompleted = (instance) => {
+      const activeConfig = configRef.current;
+      const isLandscape = activeConfig.aspectRatio === '16:9';
+      const dimText = isLandscape ? '1920x1080 (16:9 Ngang)' : '1080x1920 (9:16 Dọc)';
+
       addLog(
         'info',
-        `Chặng đua ${config.durationSeconds || 120}s của Luồng #${instance.id} kết thúc! Đã chuyển vào Hàng đợi kết xuất MP4 60 FPS (Offline Simulation sắc nét 1080x1920 không xé hình).`,
+        `Chặng đua ${activeConfig.durationSeconds || 120}s của Luồng #${instance.id} kết thúc! Đã chuyển vào Hàng đợi kết xuất MP4 ${activeConfig.fps || 60} FPS (${dimText}).`,
         instance.id
       );
 
       // Đưa ngay vào hàng đợi xuất video và hiển thị tức thì trong Kho Video với trạng thái 'ĐANG KẾT XUẤT'
       videoRecorderService.enqueueChunkExport(
         instance,
-        config,
-        config.durationSeconds,
+        activeConfig,
+        activeConfig.durationSeconds,
         (completedJob) => {
           addLog(
             'success',
-            `Đã xuất video dọc 9:16 Full HD #${completedJob.videoNumber}: "${completedJob.fileName}" (${completedJob.sizeMB}MB, Seed: #${completedJob.seed}). Tự động tiếp tục vòng đua tiếp theo.`,
+            `Đã xuất video ${isLandscape ? 'Ngang 16:9' : 'Dọc 9:16'} Full HD #${completedJob.videoNumber}: "${completedJob.fileName}" (${completedJob.sizeMB}MB, Seed: #${completedJob.seed}). Tự động tiếp tục vòng đua tiếp theo.`,
             instance.id
           );
         },
@@ -170,11 +177,12 @@ export default function App() {
 
     // Cập nhật FPS thực tế
     engine.onFpsUpdate = (fps) => {
+      const instCount = configRef.current.instanceCount;
       setStats(prev => ({
         ...prev,
         engineFPS: fps,
-        gpuUsagePct: Math.min(98, Math.round(18 + config.instanceCount * 7.5 + (Math.random() * 4 - 2))),
-        cpuUsagePct: Math.min(95, Math.round(12 + config.instanceCount * 4.2 + (Math.random() * 3 - 1.5)))
+        gpuUsagePct: Math.min(98, Math.round(18 + instCount * 7.5 + (Math.random() * 4 - 2))),
+        cpuUsagePct: Math.min(95, Math.round(12 + instCount * 4.2 + (Math.random() * 3 - 1.5)))
       }));
     };
 
@@ -203,8 +211,8 @@ export default function App() {
   // Đồng bộ khi thay đổi số lượng instance hoặc thời lượng
   useEffect(() => {
     if (!engineRef.current) return;
-    engineRef.current.updateInstanceCount(config.instanceCount, config.durationSeconds);
-  }, [config.instanceCount, config.durationSeconds]);
+    engineRef.current.updateInstanceCount(config.instanceCount, config.durationSeconds, config.carsPerRace ?? 0);
+  }, [config.instanceCount, config.durationSeconds, config.carsPerRace]);
 
   // Đồng bộ âm thanh trực tiếp với luồng đang được người dùng bấm xem chi tiết
   useEffect(() => {
@@ -258,7 +266,14 @@ export default function App() {
   const handleChangeConfig = (updates: Partial<SystemConfig>) => {
     setConfig(prev => {
       const updated = { ...prev, ...updates };
-      if (engineRef.current && (updates.carsPerRace !== undefined || updates.instanceCount !== undefined)) {
+      if (
+        engineRef.current &&
+        (updates.carsPerRace !== undefined ||
+          updates.instanceCount !== undefined ||
+          updates.aspectRatio !== undefined ||
+          updates.resolution !== undefined ||
+          updates.durationSeconds !== undefined)
+      ) {
         engineRef.current.applyConfig(updated);
       }
       addLog('info', `Cập nhật cấu hình: ${Object.keys(updates).join(', ')}`);
@@ -365,7 +380,9 @@ export default function App() {
     if (!engineRef.current) return;
     setIsExporting6Threads(true);
     setExportProgressText(`ĐANG XUẤT: LUỒNG 1/${config.instanceCount} (0%)`);
-    addLog('info', `Bắt đầu xuất đồng loạt ${config.instanceCount} Video Dọc 1080x1920 (9:16) 60 FPS (${config.durationSeconds || 120}s) với WebCodecs tăng tốc GPU...`);
+    const isLandscape = config.aspectRatio === '16:9';
+    const dimLabel = isLandscape ? 'Ngang 1920x1080 (16:9)' : 'Dọc 1080x1920 (9:16)';
+    addLog('info', `Bắt đầu xuất đồng loạt ${config.instanceCount} Video ${dimLabel} ${config.fps || 60} FPS (${config.durationSeconds || 120}s) với WebCodecs tăng tốc GPU...`);
     if (canvasRef.current) {
       videoRecorderService.bindEngine(engineRef.current, canvasRef.current);
     }
@@ -390,7 +407,7 @@ export default function App() {
           totalVideosCreated: prev.totalVideosCreated + jobs.length,
           diskFreeGB: Math.max(5, prev.diskFreeGB - (jobs.length * 4) / 1024)
         }));
-        addLog('success', `Đã xuất thành công ${jobs.length} Video Dọc Full HD 1080x1920 (9:16) 60 FPS chuẩn không tua nhanh, không giật lag! Đã lưu vào Kho Video.`);
+        addLog('success', `Đã xuất thành công ${jobs.length} Video ${dimLabel} ${config.fps || 60} FPS chuẩn không tua nhanh, không giật lag! Đã lưu vào Kho Video.`);
         setIsLibraryOpen(true);
       }
     } catch (err) {
@@ -431,11 +448,26 @@ export default function App() {
         isExporting6Videos={isExporting6Threads}
         exportProgressText={exportProgressText}
         onSelectDuration={(duration) => {
-          setConfig(prev => ({ ...prev, durationSeconds: duration }));
-          if (engineRef.current) {
-            engineRef.current.updateInstanceCount(config.instanceCount, duration, config.carsPerRace);
-          }
-          addLog('info', `Đã thay đổi thời lượng xuất video thành: ${duration} giây (${duration === 120 ? '2 Phút' : duration === 70 ? '1 Phút 10s (1.10s)' : duration === 60 ? '1 Phút' : '30s Nhanh'})`);
+          setConfig(prev => {
+            const updated = { ...prev, durationSeconds: duration };
+            if (engineRef.current) {
+              engineRef.current.applyConfig(updated);
+            }
+            return updated;
+          });
+          const durationLabel =
+            duration === 1200
+              ? '20 Phút'
+              : duration === 600
+              ? '10 Phút'
+              : duration === 120
+              ? '2 Phút'
+              : duration === 70
+              ? '1 Phút 10s (1.10s)'
+              : duration === 60
+              ? '1 Phút'
+              : '30s Nhanh';
+          addLog('info', `Đã thay đổi thời lượng xuất video thành: ${duration} giây (${durationLabel})`);
         }}
         processingCount={processingCount}
         processingProgress={processingProgress}
@@ -469,6 +501,7 @@ export default function App() {
             canvasRef={canvasRef}
             instances={instancesState}
             activeCount={config.instanceCount}
+            aspectRatio={config.aspectRatio}
             onInspectInstance={id => setInspectInstanceId(id)}
             onQuickSwitchCamera={handleSelectCamera}
           />
@@ -511,6 +544,7 @@ export default function App() {
       {inspectedInstance && (
         <InstanceDetailModal
           instance={inspectedInstance}
+          aspectRatio={config.aspectRatio}
           onClose={() => setInspectInstanceId(null)}
           onSelectCamera={handleSelectCamera}
           onUnlockCamera={handleUnlockCamera}

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { RacingInstance } from './racingInstance';
-import { SystemConfig, CameraMode, RoadLayoutType } from '../types';
+import { AspectRatioOption, SystemConfig, CameraMode, RoadLayoutType } from '../types';
 import { audioEngine } from './audioEngine';
 import { commentaryEngine } from './commentaryEngine';
 import { getRaceStoryline } from './storylineEngine';
@@ -29,6 +29,9 @@ export class MultiInstanceEngine {
   public currentFPS: number = 60;
   private resizeObserver: ResizeObserver | null = null;
   public focusedInstanceId: number | null = null;
+  private aspectRatio: AspectRatioOption = '9:16';
+  private activeConfig: SystemConfig | null = null;
+  private exportBusy: boolean = false;
 
   constructor() {}
 
@@ -36,8 +39,17 @@ export class MultiInstanceEngine {
     this.focusedInstanceId = id;
   }
 
+  public setExportBusy(busy: boolean) {
+    this.exportBusy = busy;
+    if (!busy) {
+      this.lastFrameTime = performance.now();
+    }
+  }
+
   init(canvas: HTMLCanvasElement, config: SystemConfig) {
     this.canvas = canvas;
+    this.activeConfig = { ...config };
+    this.aspectRatio = config.aspectRatio || (config.resolution === '1080p (Ngang)' ? '16:9' : '9:16');
 
     this.renderer = new THREE.WebGLRenderer({
       canvas,
@@ -156,6 +168,11 @@ export class MultiInstanceEngine {
   }
 
   applyConfig(config: SystemConfig) {
+    this.activeConfig = { ...config };
+    const nextAspect: AspectRatioOption = config.aspectRatio || (config.resolution === '1080p (Ngang)' ? '16:9' : '9:16');
+    const aspectChanged = this.aspectRatio !== nextAspect;
+    this.aspectRatio = nextAspect;
+
     const cars = config.carsPerRace ?? 0;
     this.updateInstanceCount(config.instanceCount, config.durationSeconds, cars);
     for (const instance of this.instances.values()) {
@@ -164,34 +181,52 @@ export class MultiInstanceEngine {
         instance.recycleToNextRace(config.durationSeconds, cars);
       }
     }
+
+    if (aspectChanged) {
+      setTimeout(this.handleResize, 30);
+      setTimeout(this.handleResize, 120);
+    }
   }
 
   start(config: SystemConfig) {
+    // Ngăn chặn khởi chạy hai vòng lặp requestAnimationFrame song song khi bấm Bắt Đầu Chạy
+    if (this.animationFrameId !== null) {
+      cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = null;
+    }
+
+    this.activeConfig = { ...config };
     this.isRunning = true;
     this.isPaused = false;
     this.lastFrameTime = performance.now();
 
-    // Kích hoạt bình luận viên khai mạc chặng đua tích hợp cốt truyện và bộ ba nhân vật
+    // Kích hoạt bình luận viên khai mạc chặng đua tích hợp cốt truyện và dàn tay đua ngẫu nhiên thực tế
     setTimeout(() => {
       const firstInst = this.instances.get(1);
       const cars = firstInst?.cars || [];
+      const raceDrivers = cars.map(c => c.state.driverName).filter((d): d is string => Boolean(d));
       const d1 = cars[0]?.state.driverName || 'Cristiano Ronaldo';
       const d2 = cars[1]?.state.driverName || 'Lionel Messi';
-      const d3 = cars[2]?.state.driverName || 'Neymar Jr';
-      const storyline = getRaceStoryline(firstInst?.seedData?.seed || 100, commentaryEngine.getLanguage());
+      const d3 = cars[2]?.state.driverName || 'Neymar Jr.';
+      const seedVal = firstInst?.seedData?.seed || 100;
+      const storyline = getRaceStoryline(seedVal, commentaryEngine.getLanguage(), raceDrivers);
 
       const startAnnouncement = commentaryEngine.getLanguage() === 'en'
-        ? `[STORYLINE #${storyline.index}: ${storyline.title}] Lights out and away we go! Epic clash between ${d1}, ${d2}, and ${d3} with ${storyline.secondaryCharacter} watching closely!`
-        : `[CỐT TRUYỆN #${storyline.index}: ${storyline.title}] Đèn đỏ đã tắt! Đại chiến tam mã rực lửa giữa ${d1}, ${d2} và ${d3}! ${storyline.secondaryCharacter} đang theo dõi từng mét đường!`;
+        ? `[STORYLINE #${storyline.index}: ${storyline.title}] Lights out at ${firstInst?.seedData?.biome?.name || 'Grand Prix'}! Epic clash between ${d1}, ${d2}, and ${d3} with ${storyline.secondaryCharacter} watching closely!`
+        : `[CỐT TRUYỆN #${storyline.index}: ${storyline.title}] Đèn đỏ đã tắt tại ${firstInst?.seedData?.biome?.name || 'Trường Đua'}! Đại chiến tam mã rực lửa giữa ${d1}, ${d2} và ${d3}! ${storyline.secondaryCharacter} đang theo dõi từng mét đường!`;
 
       commentaryEngine.triggerEvent('START', startAnnouncement, true, {
         driverName: d1,
-        speedKmh: 420
+        targetDriver: d2,
+        speedKmh: 420,
+        seed: seedVal
       });
     }, 1200);
 
     const loop = (currentTime: number) => {
       if (!this.isRunning) return;
+
+      const liveConfig = this.activeConfig || config;
 
       let rawDelta = (currentTime - this.lastFrameTime) / 1000;
       this.lastFrameTime = currentTime;
@@ -227,8 +262,8 @@ export class MultiInstanceEngine {
         for (const instance of this.instances.values()) {
           const { chunkCompleted, activeOvertakeCarId, collisionCarId, collisionCarPos, collisionIntensity } = instance.update(
             delta,
-            config.aiAggressionGlobal,
-            config.cinematicAutoDirector
+            liveConfig.aiAggressionGlobal,
+            liveConfig.cinematicAutoDirector
           );
 
           const isAudioActive = (!this.focusedInstanceId && instance.id === 1) || (this.focusedInstanceId === instance.id);
@@ -254,15 +289,19 @@ export class MultiInstanceEngine {
 
           if (activeOvertakeCarId) {
             const car = instance.cars.find(c => c.state.id === activeOvertakeCarId);
+            const rivalCar = instance.cars.find(c => c.state.id !== activeOvertakeCarId);
             commentaryEngine.triggerEvent('OVERTAKE', undefined, false, {
               driverName: car?.state.driverName,
+              targetDriver: rivalCar?.state.driverName,
               speedKmh: Math.round(car?.state.speed || 480),
               seed: (instance.seedData?.seed || 100) + Math.round(currentTime)
             });
           } else if (collisionCarId) {
             const car = instance.cars.find(c => c.state.id === collisionCarId);
+            const rivalCar = instance.cars.find(c => c.state.id !== collisionCarId);
             commentaryEngine.triggerEvent('COLLISION', undefined, false, {
               driverName: car?.state.driverName,
+              targetDriver: rivalCar?.state.driverName,
               speedKmh: Math.round(car?.state.speed || 480),
               seed: (instance.seedData?.seed || 100) + Math.round(currentTime)
             });
@@ -270,15 +309,17 @@ export class MultiInstanceEngine {
 
           if (chunkCompleted) {
             const winnerCar = instance.cars.find(c => c.state.rank === 1) || instance.cars[0];
+            const runnerUp = instance.cars.find(c => c.state.rank === 2) || instance.cars[1];
             commentaryEngine.triggerEvent('FINISH', undefined, true, {
               driverName: winnerCar?.state.driverName,
+              targetDriver: runnerUp?.state.driverName,
               speedKmh: Math.round(winnerCar?.state.speed || 520),
-              seed: (instance.seedData?.seed || 100) + instance.id
+              seed: (instance.seedData?.seed || 100) + instance.id + instance.videoChunkIndex
             });
             if (this.onChunkCompleted) {
               this.onChunkCompleted(instance);
             }
-            instance.recycleToNextRace(config.durationSeconds, config.carsPerRace);
+            instance.recycleToNextRace(liveConfig.durationSeconds, liveConfig.carsPerRace);
           }
 
           if (!primaryCar && instance.cars.length > 0) {
@@ -456,10 +497,10 @@ export class MultiInstanceEngine {
       }
 
       if (!usedDomRect) {
-        // Fallback: 9:16 aspect ratio centered in cell (CSS pixels)
+        // Fallback: 16:9 or 9:16 aspect ratio centered in cell (CSS pixels)
         const col = index % cols;
         const row = Math.floor(index / cols);
-        const targetAspect = 9 / 16;
+        const targetAspect = this.aspectRatio === '16:9' ? 16 / 9 : 9 / 16;
         let viewW = cellWidth;
         let viewH = cellHeight;
 
@@ -491,7 +532,7 @@ export class MultiInstanceEngine {
       this.renderer.setViewport(x, y, w, h);
       this.renderer.setScissor(x, y, w, h);
 
-      // Adjust camera aspect ratio for this 9:16 vertical viewport
+      // Adjust camera aspect ratio for this viewport
       const cam = instance.cameraDirector.camera;
       cam.aspect = Math.max(0.1, w / Math.max(1, h));
       cam.updateProjectionMatrix();
@@ -504,13 +545,14 @@ export class MultiInstanceEngine {
   }
 
   /**
-   * Render trực tiếp 3D cho một instance ở độ phân giải chuẩn 1080x1920 (9:16 Full HD)
+   * Render trực tiếp 3D cho một instance ở độ phân giải chuẩn 1920x1080 (16:9) hoặc 1080x1920 (9:16)
    * Kết nối trực tiếp với WebGL Renderer để đảm bảo video không bao giờ bị màn hình đen
    */
-  public renderInstanceDirect(instance: RacingInstance, targetRenderer: THREE.WebGLRenderer) {
+  public renderInstanceDirect(instance: RacingInstance, targetRenderer: THREE.WebGLRenderer, aspectRatio?: AspectRatioOption) {
     const cam = instance.cameraDirector.camera;
     const oldAspect = cam.aspect;
-    cam.aspect = 1080 / 1920;
+    const activeAspect = aspectRatio || this.aspectRatio;
+    cam.aspect = activeAspect === '16:9' ? 1920 / 1080 : 1080 / 1920;
     cam.updateProjectionMatrix();
 
     targetRenderer.render(instance.scene, cam);

@@ -6,6 +6,7 @@
  */
 
 import { generateFullRaceCommentaryTimeline } from './commentaryGenerator';
+import { createSeededPRNG, hashString32 } from '../utils/prng';
 
 export interface CommentaryClipInfo {
   id: string;
@@ -914,7 +915,42 @@ class CommentarySoundManager {
       try {
         const ctx = this.getAudioContext();
 
-        const loadPromises = COMMENTARY_CLIPS.map(async (info) => {
+        // 1. Tự động nạp thêm toàn bộ các clip từ funny_index.json và index.json nếu có
+        try {
+          const resFunny = await fetch('/audio/commentary/funny_index.json');
+          if (resFunny.ok) {
+            const list = await resFunny.json();
+            for (const item of list) {
+              if (!COMMENTARY_CLIPS.some(c => c.id === item.id)) {
+                COMMENTARY_CLIPS.push(item);
+              }
+            }
+          }
+        } catch {}
+
+        try {
+          const resEn = await fetch('/audio/commentary/index.json');
+          if (resEn.ok) {
+            const list = await resEn.json();
+            for (const item of list) {
+              if (!COMMENTARY_CLIPS.some(c => c.id === item.id)) {
+                COMMENTARY_CLIPS.push({
+                  id: item.id,
+                  instanceId: 0,
+                  type: item.type,
+                  driver: 'F1 Grand Prix Lead',
+                  text: item.text,
+                  path: item.path,
+                  duration: item.duration || 5.0
+                });
+              }
+            }
+          }
+        } catch {}
+
+        const allClipsToLoad = [...COMMENTARY_CLIPS, ...this.customClips];
+
+        const loadPromises = allClipsToLoad.map(async (info) => {
           try {
             const response = await fetch(info.path);
             if (!response.ok) return;
@@ -955,8 +991,11 @@ class CommentarySoundManager {
   /**
    * Lấy clip ngẫu nhiên theo loại sự kiện
    */
-  getRandomClip(type: string, seed: number = 0): CommentaryClipInfo {
-    const matched = COMMENTARY_CLIPS.filter(c => c.type === type);
+  getRandomClip(type: string, seed: number = 0, excludeIds?: Set<string>): CommentaryClipInfo {
+    let matched = COMMENTARY_CLIPS.filter(c => c.type === type && (!excludeIds || !excludeIds.has(c.id)));
+    if (matched.length === 0) {
+      matched = COMMENTARY_CLIPS.filter(c => c.type === type);
+    }
     if (matched.length > 0) {
       const idx = Math.abs(seed) % matched.length;
       return matched[idx];
@@ -964,26 +1003,59 @@ class CommentarySoundManager {
     return COMMENTARY_CLIPS[Math.abs(seed) % COMMENTARY_CLIPS.length];
   }
 
+  private customClips: CommentaryClipInfo[] = [];
+
+  public registerCustomClip(clip: CommentaryClipInfo) {
+    if (!this.customClips.some(c => c.id === clip.id)) {
+      this.customClips.push(clip);
+    }
+  }
+
+  public getCustomClips(): CommentaryClipInfo[] {
+    return this.customClips;
+  }
+
   /**
-   * Lấy clip độc quyền theo Luồng (Instance 1 đến 10), Sự Kiện và Seed ngẫu nhiên của từng video
-   * Kết hợp ma trận biến thể variant 1 & 2 để các video khác nhau sẽ có các câu chuyện khác nhau!
+   * Lấy clip độc quyền hoặc random đa dạng từ toàn bộ kho âm thanh bình luận viên
+   * Cơ chế Chống Trùng Lặp (Anti-Repetition): Không bao giờ chọn lại clip đã xuất hiện trong cùng 1 video!
    */
-  getClipForInstance(instanceId: number, type: 'START' | 'NITRO' | 'OVERTAKE' | 'DRIFT' | 'FINISH', seed: number = 0): CommentaryClipInfo {
-    const validInstId = ((Math.max(1, instanceId) - 1) % 10) + 1;
-    const matches = COMMENTARY_CLIPS.filter(c => c.instanceId === validInstId && c.type === type);
-    if (matches.length > 0) {
-      const idx = Math.abs(seed) % matches.length;
-      return matches[idx];
+  getClipForInstance(
+    instanceId: number,
+    type: 'START' | 'NITRO' | 'OVERTAKE' | 'DRIFT' | 'BATTLE' | 'FINISH' | string,
+    seed: number = 0,
+    forceDiversity: boolean = true,
+    excludeIds?: Set<string>
+  ): CommentaryClipInfo {
+    const rng = createSeededPRNG(seed || 1, instanceId * 1013 + hashString32(String(type)));
+
+    // 1. Kiểm tra kho clip tùy chỉnh người dùng đã thêm nếu có
+    const customMatches = this.customClips.filter(c => c.type === type && (!excludeIds || !excludeIds.has(c.id)));
+    if (customMatches.length > 0 && rng.next() < 0.5) {
+      return rng.pick(customMatches);
     }
 
-    // Fallback nếu không có type cụ thể
-    const anyMatches = COMMENTARY_CLIPS.filter(c => c.instanceId === validInstId);
-    if (anyMatches.length > 0) {
-      const idx = Math.abs(seed) % anyMatches.length;
-      return anyMatches[idx];
+    // 2. Tìm trong toàn bộ kho COMMENTARY_CLIPS theo type chưa sử dụng (Anti-Repetition filter)
+    let allMatches = COMMENTARY_CLIPS.filter(c => c.type === type && (!excludeIds || !excludeIds.has(c.id)));
+    // Nếu đã dùng hết toàn bộ clip của loại này trong video, reset lại danh sách loại này
+    if (allMatches.length === 0) {
+      allMatches = COMMENTARY_CLIPS.filter(c => c.type === type);
     }
 
-    return COMMENTARY_CLIPS[0];
+    if (allMatches.length > 0) {
+      if (forceDiversity) {
+        // Lấy ngẫu nhiên đa dạng từ toàn bộ kho clip thể thao & hài hước
+        return rng.pick(allMatches);
+      } else {
+        const validInstId = ((Math.max(1, instanceId) - 1) % 10) + 1;
+        const matches = allMatches.filter(c => c.instanceId === validInstId);
+        if (matches.length > 0) {
+          return rng.pick(matches);
+        }
+        return rng.pick(allMatches);
+      }
+    }
+
+    return rng.pick(COMMENTARY_CLIPS);
   }
 
   private timelineCache = new Map<string, ScheduledCommentaryEvent[]>();
@@ -991,11 +1063,20 @@ class CommentarySoundManager {
   /**
    * Tạo kịch bản bình luận thời gian thực cho từng luồng (Instance #1 đến #10)
    * Tự động biến đổi theo Seed của video -> Hàng ngàn video xuất xưởng đều có câu chuyện khác nhau!
-   * Sử dụng Ma trận Kịch bản Tổ Hợp Phong Phú Đỉnh Cao (hàng triệu biến thể tự động kết hợp)
+   * Chống trùng lặp tuyệt đối 100%: Mỗi sự kiện trên timeline là 1 file âm thanh độc nhất!
    */
-  getTimelineForInstance(instanceId: number, seed: number = 632585, durationSeconds: number = 120, lang: 'vi' | 'en' = 'vi'): ScheduledCommentaryEvent[] {
+  getTimelineForInstance(
+    instanceId: number,
+    seed: number = 632585,
+    durationSeconds: number = 120,
+    lang: 'vi' | 'en' = 'vi',
+    drivers?: string[],
+    trackName?: string
+  ): ScheduledCommentaryEvent[] {
     const validInstId = ((Math.max(1, instanceId) - 1) % 10) + 1;
-    const cacheKey = `${validInstId}_${seed}_${durationSeconds}_${lang}`;
+    const driversSig = drivers && drivers.length > 0 ? hashString32(drivers.join('|')) : 0;
+    const trackSig = trackName ? hashString32(trackName) : 0;
+    const cacheKey = `${validInstId}_${seed}_${durationSeconds}_${lang}_${driversSig}_${trackSig}`;
     const cached = this.timelineCache.get(cacheKey);
     if (cached) {
       // Đảm bảo dữ liệu âm thanh PCM luôn được nạp đầy đủ vào các sự kiện đã cache
@@ -1012,21 +1093,35 @@ class CommentarySoundManager {
       }
       return cached;
     }
-    
-    // Tạo kịch bản biến thể phong phú hàng triệu câu tự động theo seed và ngôn ngữ
-    const rawTimeline = generateFullRaceCommentaryTimeline(validInstId, seed, durationSeconds, lang);
+
+    // Tạo kịch bản biến thể phong phú hàng triệu câu tự động theo seed, tay đua thực tế và ngôn ngữ
+    const rawTimeline = generateFullRaceCommentaryTimeline(validInstId, seed, durationSeconds, lang, drivers, trackName);
     const timeline: ScheduledCommentaryEvent[] = [];
+    const usedClipIds = new Set<string>(); // Khóa bộ nhớ chống trùng lặp trong cùng 1 video!
 
     for (let i = 0; i < rawTimeline.length; i++) {
       const evt = rawTimeline[i];
-      // Tìm audio clip nền phù hợp theo type của luồng
+      // Phân loại chính xác type của sự kiện
+      let targetType: 'START' | 'NITRO' | 'OVERTAKE' | 'DRIFT' | 'BATTLE' | 'FINISH' = 'OVERTAKE';
+      if (evt.type === 'START') targetType = 'START';
+      else if (evt.type === 'NITRO') targetType = 'NITRO';
+      else if (evt.type === 'DRIFT') targetType = 'DRIFT';
+      else if (evt.type === 'BATTLE' || evt.type === 'SLIPSTREAM') targetType = 'BATTLE';
+      else if (evt.type === 'FINISH') targetType = 'FINISH';
+      else targetType = 'OVERTAKE';
+
+      // Tìm audio clip nền phù hợp và CHƯA TỪNG ĐƯỢC DÙNG trong video này
+      const clipSeed = (seed ^ Math.imul(i + 1, 2654435761)) >>> 0;
       const clip = this.getClipForInstance(
         validInstId,
-        (evt.type === 'START' || evt.type === 'NITRO' || evt.type === 'OVERTAKE' || evt.type === 'DRIFT' || evt.type === 'FINISH')
-          ? evt.type
-          : 'OVERTAKE',
-        seed + (i * 1013)
+        targetType,
+        clipSeed,
+        true,
+        usedClipIds
       );
+      if (clip) {
+        usedClipIds.add(clip.id);
+      }
 
       const scheduled: ScheduledCommentaryEvent = {
         clipId: clip?.id || evt.clipId,

@@ -27,20 +27,36 @@ export interface IncitingIncidentTemplate {
   hookEn: string;
 }
 
-// 60 Siêu sao bóng đá thế giới làm tay đua chính
+// 140+ Siêu sao bóng đá, đua xe F1 & thể thao toàn cầu làm tay đua chính
 export const STAR_DRIVERS: string[] = [
-  'Cristiano Ronaldo', 'Lionel Messi', 'Neymar Jr', 'Kylian Mbappe', 'Erling Haaland',
-  'Kevin De Bruyne', 'David Beckham', 'Son Heung-min', 'Vinicius Jr', 'Jude Bellingham',
-  'Luka Modric', 'Karim Benzema', 'Mohamed Salah', 'Harry Kane', 'Robert Lewandowski',
-  'Bruno Fernandes', 'Marcus Rashford', 'Harry Maguire', 'Casemiro', 'Alisson Becker',
-  'Manuel Neuer', 'Sergio Ramos', 'Pepe', 'Zlatan Ibrahimovic', 'Ronaldinho',
-  'Kaka', 'Zinedine Zidane', 'Wayne Rooney', 'Thierry Henry', 'Ronaldo Nazario',
-  'Phil Foden', 'Bukayo Saka', 'Rodri', 'Bernardo Silva', 'Antoine Griezmann',
-  'Toni Kroos', 'Thomas Muller', 'Angel Di Maria', 'Federico Valverde', 'Eduardo Camavinga',
-  'Gavi', 'Pedri', 'Lamine Yamal', 'Darwin Nunez', 'Luis Diaz',
-  'Virgil van Dijk', 'Ruben Dias', 'Emiliano Martinez', 'Thibaut Courtois', 'Lautaro Martinez',
-  'Julian Alvarez', 'Victor Osimhen', 'Khvicha Kvaratskhelia', 'Declan Rice', 'Martin Odegaard',
-  'William Saliba', 'Joshua Kimmich', 'Kingsley Coman', 'Rafael Leao', 'Ousmane Dembele'
+  'Cristiano Ronaldo', 'Lionel Messi', 'Neymar Jr.', 'Kylian Mbappé', 'Erling Haaland',
+  'Kevin De Bruyne', 'David Beckham', 'Son Heung-min', 'Vinícius Júnior', 'Jude Bellingham',
+  'Luka Modrić', 'Karim Benzema', 'Mohamed Salah', 'Harry Kane', 'Robert Lewandowski',
+  'Bruno Fernandes', 'Marcus Rashford', 'Casemiro', 'Alisson Becker', 'Manuel Neuer',
+  'Sergio Ramos', 'Pepe', 'Zlatan Ibrahimović', 'Ronaldinho', 'Kaká',
+  'Zinedine Zidane', 'Wayne Rooney', 'Thierry Henry', 'Ronaldo Nazário', 'Pelé',
+  'Diego Maradona', 'Phil Foden', 'Bukayo Saka', 'Rodri', 'Bernardo Silva',
+  'Antoine Griezmann', 'Toni Kroos', 'Thomas Müller', 'Ángel Di María', 'Federico Valverde',
+  'Eduardo Camavinga', 'Gavi', 'Pedri', 'Lamine Yamal', 'Darwin Núñez',
+  'Luis Díaz', 'Virgil van Dijk', 'Rúben Dias', 'Emiliano Martínez', 'Thibaut Courtois',
+  'Lautaro Martínez', 'Julián Álvarez', 'Victor Osimhen', 'Khvicha Kvaratskhelia', 'Declan Rice',
+  'Martin Ødegaard', 'William Saliba', 'Joshua Kimmich', 'Kingsley Coman', 'Rafael Leão',
+  'Ousmane Dembélé', 'Xavi Hernández', 'Andrés Iniesta', 'Andrea Pirlo', 'Gianluigi Buffon',
+  'Paolo Maldini', 'Roberto Carlos', 'Rivaldo', 'Arjen Robben', 'Robin van Persie',
+  'Max Verstappen', 'Lewis Hamilton', 'Charles Leclerc', 'Lando Norris', 'Fernando Alonso',
+  'Carlos Sainz', 'George Russell', 'Oscar Piastri', 'Sergio Pérez', 'Pierre Gasly',
+  'Esteban Ocon', 'Daniel Ricciardo', 'Valtteri Bottas', 'Yuki Tsunoda', 'Alexander Albon',
+  'Nico Hülkenberg', 'Lance Stroll', 'Kevin Magnussen', 'Guanyu Zhou', 'Oliver Bearman',
+  'Franco Colapinto', 'Liam Lawson', 'Kimi Antonelli', 'Ayrton Senna', 'Michael Schumacher',
+  'Sebastian Vettel', 'Alain Prost', 'Kimi Räikkönen', 'Mika Häkkinen', 'Niki Lauda',
+  'Nigel Mansell', 'Mario Andretti', 'Jackie Stewart', 'Jim Clark', 'Juan Manuel Fangio',
+  'Gilles Villeneuve', 'Stirling Moss', 'Emerson Fittipaldi', 'Nelson Piquet', 'James Hunt',
+  'Jenson Button', 'Damon Hill', 'Mark Webber', 'Felipe Massa', 'Juan Pablo Montoya',
+  'Ken Miles', 'Colin McRae', 'Sébastien Loeb', 'Sébastien Ogier', 'Ken Block',
+  'Valentino Rossi', 'Marc Márquez', 'Francesco Bagnaia', 'Dale Earnhardt', 'Jeff Gordon',
+  'LeBron James', 'Michael Jordan', 'Kobe Bryant', 'Stephen Curry', "Shaquille O'Neal",
+  'Roger Federer', 'Rafael Nadal', 'Novak Djokovic', 'Usain Bolt', 'Michael Phelps',
+  'Tiger Woods', 'Muhammad Ali', 'Carlos Alcaraz', 'Jannik Sinner', 'Shohei Ohtani'
 ];
 
 // 60 Nhân vật phụ hài hước

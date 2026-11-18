@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CameraMode } from '../types';
 import { Car3DObject } from './vehiclePhysics';
-import { safeGetPointAt } from './curveUtils';
+import { safeGetPointAt, safeGetTangentAt, getSafeCurveU } from './curveUtils';
 
 export class CameraDirector {
   // Mặc định ban đầu luôn là góc truyền hình bao quát nhiều xe (Helicam / Multi-car pack)
@@ -20,11 +20,11 @@ export class CameraDirector {
   // Thời lượng lưu khung hình: 5.5 đến 7.5 giây giúp mắt người xem cảm nhận trọn vẹn cục diện đường đua
   // =========================================================================
   public static readonly BROADCAST_MULTI_CAR_MODES: CameraMode[] = [
-    CameraMode.CHOPPER_HELI_CHASE,          // Trực thăng truyền hình (Helicam) lượn trên cao 35m
-    CameraMode.MULTI_CAR_PACK_CHASE,        // Bám đuôi đoàn xe từ trên cao 35–50m bao quát cùng lúc 5 đến 15 xe đang so kè
-    CameraMode.PANORAMIC,                   // Toàn cảnh góc rộng (Panoramic / Jib Crane) từ đài cao
-    CameraMode.TRACKSIDE_TELEPHOTO,         // Ống kính Telephoto 85mm ven đường lia máy theo đoàn xe vụt qua
-    CameraMode.MULTI_CAR_FRONT_FACING,      // Đón đầu trực diện đoàn xe
+    CameraMode.CHOPPER_HELI_CHASE,          // Trực thăng truyền hình (Helicam) lượn & bay vút lên cao
+    CameraMode.MULTI_CAR_PACK_CHASE,        // Bám đuôi đoàn xe chính giữa màn hình
+    CameraMode.PANORAMIC,                   // Toàn cảnh từ trên cao nhìn xuống
+    CameraMode.HIGH_SPORTS_PANORAMA,        // Toàn cảnh thể thao trên cao chuẩn truyền hình
+    CameraMode.MULTI_CAR_FRONT_FACING,      // Đón đầu trực diện đoàn xe chính giữa màn hình
   ];
 
   // =========================================================================
@@ -98,19 +98,21 @@ export class CameraDirector {
     this.currentMode = mode;
     this.isManualLocked = manualLock;
     this.dwellTimer = 0;
-    if (mode === CameraMode.TRACKSIDE_TELEPHOTO) {
-      this.hasUsedTelephotoInRace = true;
-      this.nextSwitchTime = 2.0;
-    }
     if (mode === CameraMode.CHOPPER_HELI_CHASE) {
       this.hasUsedHelicopterInRace = true;
       this.nextSwitchTime = 8.5;
+    } else if (mode === CameraMode.SPECTATOR_TRACKSIDE) {
+      this.hasUsedSpectatorInRace = true;
+    } else if (mode === CameraMode.PANORAMIC || mode === CameraMode.HIGH_SPORTS_PANORAMA) {
+      this.hasUsedPanoramicInRace = true;
+      this.randomizePanoramicAngle();
     }
     this.hasStationPos = false;
     this.hasGrandstandPos = false;
     this.hasSpectatorPos = false;
     this.hasHelipadPos = false;
     this.hasSmoothHeading = false;
+    this.hasGyroQuat = false;
     this.isFirstFrame = true; // Bắt tức thì vào vị trí góc quay mới, triệt tiêu việc bị cách xa hàng trăm mét
   }
 
@@ -120,21 +122,78 @@ export class CameraDirector {
     this.nextSwitchTime = 4.5 + Math.random() * 1.5;
   }
 
-  // Đánh dấu góc quay Telephoto chỉ xuất hiện tối đa 1 lần và đúng 2 giây trong mỗi chặng đua
-  private hasUsedTelephotoInRace: boolean = false;
-  // Đánh dấu góc quay trực thăng (Helicam) chỉ xuất hiện đúng 1 lần trong mỗi chặng đua
+  // Các góc quay đặc biệt chỉ được phép xuất hiện tối đa 1 lần mỗi chặng đua
   private hasUsedHelicopterInRace: boolean = false;
+  private hasUsedSpectatorInRace: boolean = false;
+  private hasUsedPanoramicInRace: boolean = false;
+
+  // Tham số góc toàn cảnh trên cao đa hướng (Panoramic Multi-Angle Aerial Sweep)
+  private panoramicVariant: number = 0;
+  private panoramicSideSign: number = 1;
+  private panoramicAltBase: number = 64.0;
+  private panoramicStartAz: number = 0.0;
+  private panoramicSweepSpan: number = 2.1;
+  private panoramicOrbitDir: number = 1;
+  private panoramicStationPos: THREE.Vector3 = new THREE.Vector3();
+  private hasPanoramicStationPos: boolean = false;
+
+  // Gyro-stabilized drift-free quaternion cho các góc gắn xe (không xoay giật theo độ drift của xe)
+  private stabilizedOnboardQuat: THREE.Quaternion = new THREE.Quaternion();
+  private hasGyroQuat: boolean = false;
+
+  // Pre-allocated scratch vectors/matrices/quaternions (triệt tiêu GC micro-stutter ở 8 luồng 60 FPS)
+  private readonly _up: THREE.Vector3 = new THREE.Vector3(0, 1, 0);
+  private readonly _idealPos: THREE.Vector3 = new THREE.Vector3();
+  private readonly _lookTarget: THREE.Vector3 = new THREE.Vector3();
+  private readonly _rawCarForward: THREE.Vector3 = new THREE.Vector3();
+  private readonly _gyroRight: THREE.Vector3 = new THREE.Vector3();
+  private readonly _gyroUp: THREE.Vector3 = new THREE.Vector3();
+  private readonly _gyroBasis: THREE.Matrix4 = new THREE.Matrix4();
+  private readonly _targetGyroQuat: THREE.Quaternion = new THREE.Quaternion();
+  private readonly _roadForwardFlat: THREE.Vector3 = new THREE.Vector3();
+  private readonly _smoothRight: THREE.Vector3 = new THREE.Vector3();
+  private readonly _right: THREE.Vector3 = new THREE.Vector3();
+  private readonly _tmpLocalOffset: THREE.Vector3 = new THREE.Vector3();
+  private readonly _finalCamPos: THREE.Vector3 = new THREE.Vector3();
+  private readonly _finalLookTarget: THREE.Vector3 = new THREE.Vector3();
+  private readonly _shakeOffsetVec: THREE.Vector3 = new THREE.Vector3();
+  private readonly _carLocalRight: THREE.Vector3 = new THREE.Vector3();
+  private readonly _carLocalUp: THREE.Vector3 = new THREE.Vector3();
+  private readonly _panAheadPoint: THREE.Vector3 = new THREE.Vector3();
+  private readonly _panAheadTan: THREE.Vector3 = new THREE.Vector3();
+  private readonly _panAheadRight: THREE.Vector3 = new THREE.Vector3();
+  private readonly _curveSamplePos: THREE.Vector3 = new THREE.Vector3();
+  private readonly _curveSampleLook: THREE.Vector3 = new THREE.Vector3();
+
+  private randomizePanoramicAngle() {
+    // Luân phiên ngẫu nhiên 4 kiểu góc toàn cảnh TỪ TRÊN CAO NHÌN XUỐNG (60°-80° xuống mặt đường):
+    // 0: Đài bay tĩnh trên cao nhìn xuống khúc cua đón đoàn xe
+    // 1: Cáp treo Skycam bay vắt ngang đỉnh đường đua trên cao nhìn xuống
+    // 2: Bird's-Eye cao vút (95-126m) quan sát toàn bộ đường đua uốn lượn
+    // 3: Bay vòng cung hẹp trên đỉnh cao (84-116m) quét 140° quanh đoàn xe từ trên xuống
+    this.panoramicVariant = (this.panoramicVariant + 1 + Math.floor(Math.random() * 3)) % 4;
+    this.panoramicSideSign = Math.random() < 0.5 ? 1 : -1;
+    this.panoramicAltBase = 84.0 + Math.random() * 28.0;
+    this.panoramicStartAz = (Math.random() - 0.5) * Math.PI * 2.0;
+    this.panoramicSweepSpan = 2.0 + Math.random() * 0.7;
+    this.panoramicOrbitDir = Math.random() < 0.5 ? 1 : -1;
+    this.hasPanoramicStationPos = false;
+  }
 
   resetFirstFrame() {
     this.isFirstFrame = true;
-    this.hasUsedTelephotoInRace = false;
     this.hasUsedHelicopterInRace = false;
+    this.hasUsedSpectatorInRace = false;
+    this.hasUsedPanoramicInRace = false;
+    this.randomizePanoramicAngle();
     this.hasStationPos = false;
     this.hasGrandstandPos = false;
     this.hasSpectatorPos = false;
     this.hasHelipadPos = false;
+    this.hasPanoramicStationPos = false;
     this.hasStabilizedAnchor = false;
     this.hasSmoothHeading = false;
+    this.hasGyroQuat = false;
   }
 
   update(
@@ -161,17 +220,25 @@ export class CameraDirector {
         // Sự kiện vượt xe: 78% góc truyền hình bao quát nhiều xe, 22% cận cảnh hành động
         let overtakeBroadModes = [
           CameraMode.MULTI_CAR_OVERTAKE_WIDE, // Toàn cảnh so kè nhiều xe từ trên cao
-          CameraMode.MULTI_CAR_PACK_CHASE,    // Bám đuôi đoàn xe 35-50m trên cao
-          CameraMode.MULTI_CAR_FRONT_FACING,  // Đón đầu đoàn xe đua trực diện
+          CameraMode.MULTI_CAR_PACK_CHASE,    // Bám đuôi đoàn xe chính giữa
+          CameraMode.MULTI_CAR_FRONT_FACING,  // Đón đầu đoàn xe đua trực diện giữa màn hình
           CameraMode.CHOPPER_HELI_CHASE,      // Trực thăng truyền hình trên cao (chỉ 1 lần)
-          CameraMode.TRACKSIDE_TELEPHOTO,     // Telephoto 85mm ven đường lia theo đoàn xe (chỉ 1 lần)
-          CameraMode.PANORAMIC,               // Toàn cảnh trường đua từ đài cao
+          CameraMode.PANORAMIC,               // Toàn cảnh trên cao (chỉ 1 lần)
+          CameraMode.HIGH_SPORTS_PANORAMA,    // Toàn cảnh thể thao trên cao (chỉ 1 lần)
         ];
-        if (this.hasUsedTelephotoInRace) {
-          overtakeBroadModes = overtakeBroadModes.filter(m => m !== CameraMode.TRACKSIDE_TELEPHOTO);
-        }
         if (this.hasUsedHelicopterInRace) {
           overtakeBroadModes = overtakeBroadModes.filter(m => m !== CameraMode.CHOPPER_HELI_CHASE);
+        }
+        if (this.hasUsedSpectatorInRace) {
+          overtakeBroadModes = overtakeBroadModes.filter(m => m !== CameraMode.SPECTATOR_TRACKSIDE);
+        }
+        if (this.hasUsedPanoramicInRace) {
+          overtakeBroadModes = overtakeBroadModes.filter(
+            m => m !== CameraMode.PANORAMIC && m !== CameraMode.HIGH_SPORTS_PANORAMA
+          );
+        }
+        if (overtakeBroadModes.length === 0) {
+          overtakeBroadModes = [CameraMode.MULTI_CAR_PACK_CHASE, CameraMode.MULTI_CAR_FRONT_FACING, CameraMode.MULTI_CAR_OVERTAKE_WIDE];
         }
         const overtakeCinematicModes = [
           CameraMode.OVERTAKE_ACTION,         // Cận cảnh vượt mặt: gắn đuôi xe quay ngược về sau
@@ -184,34 +251,61 @@ export class CameraDirector {
         this.currentMode = isBroad
           ? overtakeBroadModes[Math.floor(Math.random() * overtakeBroadModes.length)]
           : overtakeCinematicModes[Math.floor(Math.random() * overtakeCinematicModes.length)];
-        this.currentTargetCarId = activeOvertakeCarId;
+        if (this.currentMode === CameraMode.MULTI_CAR_FRONT_FACING) {
+          const frontPackCars = cars.filter(c => c.state.rank <= Math.min(2, cars.length));
+          const chosenFront = frontPackCars.length > 0
+            ? frontPackCars[Math.floor(Math.random() * frontPackCars.length)]
+            : leaderCar;
+          this.currentTargetCarId = chosenFront.state.id;
+        } else if (this.currentMode === CameraMode.MULTI_CAR_PACK_CHASE && cars.length >= 4) {
+          const minChaseRank = Math.max(3, Math.floor(cars.length * 0.4));
+          const maxChaseRank = Math.max(minChaseRank, Math.ceil(cars.length * 0.85));
+          const chasePool = cars.filter(c => c.state.rank >= minChaseRank && c.state.rank <= maxChaseRank);
+          const activeCar = cars.find(c => c.state.id === activeOvertakeCarId);
+          if (activeCar && activeCar.state.rank >= 3) {
+            this.currentTargetCarId = activeCar.state.id;
+          } else {
+            const chosenChase = chasePool.length > 0
+              ? chasePool[Math.floor(Math.random() * chasePool.length)]
+              : cars[Math.floor(cars.length * 0.6)];
+            this.currentTargetCarId = chosenChase.state.id;
+          }
+        } else {
+          this.currentTargetCarId = activeOvertakeCarId;
+        }
         this.dwellTimer = 0;
-        if (this.currentMode === CameraMode.TRACKSIDE_TELEPHOTO) {
-          this.hasUsedTelephotoInRace = true;
-          this.nextSwitchTime = 2.0; // Chỉ xuất hiện 1 lần và đúng 2 giây
-        } else if (this.currentMode === CameraMode.CHOPPER_HELI_CHASE) {
+        if (this.currentMode === CameraMode.CHOPPER_HELI_CHASE) {
           this.hasUsedHelicopterInRace = true;
           this.nextSwitchTime = 8.5; // Chỉ xuất hiện 1 lần duy nhất trong toàn chặng đua
+        } else if (this.currentMode === CameraMode.SPECTATOR_TRACKSIDE) {
+          this.hasUsedSpectatorInRace = true;
+          this.nextSwitchTime = 5.0; // Chỉ xuất hiện 1 lần duy nhất
+        } else if (
+          this.currentMode === CameraMode.PANORAMIC ||
+          this.currentMode === CameraMode.HIGH_SPORTS_PANORAMA
+        ) {
+          this.hasUsedPanoramicInRace = true;
+          this.randomizePanoramicAngle();
+          this.nextSwitchTime = 6.5; // Chỉ xuất hiện tối đa 1 lần duy nhất trong toàn chặng đua
         } else {
           this.nextSwitchTime = isBroad ? (5.5 + Math.random() * 2.0) : (4.0 + Math.random() * 1.5);
         }
         this.hasStationPos = false;
         this.hasSpectatorPos = false;
         this.isFirstFrame = true; // Cắt góc chuẩn truyền hình F1 Live Show tức thì
-      } else if (this.currentMode === CameraMode.TRACKSIDE_TELEPHOTO && this.dwellTimer >= 2.0) {
-        // Góc quay Telephoto bắt buộc cắt đi sau đúng 2.0 giây và không bao giờ xuất hiện lại
-        this.hasUsedTelephotoInRace = true;
-        this.cycleNextCinematicMode(cars);
-        this.dwellTimer = 0;
-        this.hasStationPos = false;
-        this.isFirstFrame = true;
       } else if (this.dwellTimer >= this.nextSwitchTime) {
-        // Nếu vừa rời khỏi góc quay trực thăng hoặc telephoto, ghi nhận đã dùng để không lặp lại lần 2
+        // Ghi nhận các góc quay chỉ dùng 1 lần/chặng để không bao giờ lặp lại
         if (this.currentMode === CameraMode.CHOPPER_HELI_CHASE) {
           this.hasUsedHelicopterInRace = true;
         }
-        if (this.currentMode === CameraMode.TRACKSIDE_TELEPHOTO) {
-          this.hasUsedTelephotoInRace = true;
+        if (this.currentMode === CameraMode.SPECTATOR_TRACKSIDE) {
+          this.hasUsedSpectatorInRace = true;
+        }
+        if (
+          this.currentMode === CameraMode.PANORAMIC ||
+          this.currentMode === CameraMode.HIGH_SPORTS_PANORAMA
+        ) {
+          this.hasUsedPanoramicInRace = true;
         }
         // Chuyển góc quay tự động chuẩn F1 Live Show
         this.cycleNextCinematicMode(cars);
@@ -227,15 +321,52 @@ export class CameraDirector {
     if (!targetCar || this.currentMode === CameraMode.LEADER_TRACKING) {
       targetCar = leaderCar;
       this.currentTargetCarId = targetCar.state.id;
+    } else if (
+      this.currentMode === CameraMode.MULTI_CAR_FRONT_FACING &&
+      targetCar.state.rank > Math.min(3, Math.max(1, Math.ceil(cars.length * 0.25)))
+    ) {
+      const frontPackCars = cars.filter(c => c.state.rank <= Math.min(2, cars.length));
+      targetCar = frontPackCars.length > 0 ? frontPackCars[0] : leaderCar;
+      this.currentTargetCarId = targetCar.state.id;
+    } else if (
+      this.currentMode === CameraMode.MULTI_CAR_PACK_CHASE &&
+      cars.length >= 4 &&
+      targetCar.state.rank <= 2
+    ) {
+      const targetRank = Math.max(3, Math.ceil(cars.length * 0.6));
+      targetCar = cars.find(c => c.state.rank === targetRank) || cars.find(c => c.state.rank >= 3) || targetCar;
+      this.currentTargetCarId = targetCar.state.id;
     }
 
-    const idealPos = new THREE.Vector3();
-    const lookTarget = new THREE.Vector3();
+    const idealPos = this._idealPos;
+    const lookTarget = this._lookTarget;
 
     const carPos = targetCar.group.position;
-    const carQuat = targetCar.group.quaternion;
-    const rawForward = new THREE.Vector3(0, 0, 1).applyQuaternion(carQuat).normalize();
-    const up = new THREE.Vector3(0, 1, 0);
+    const rawCarQuat = targetCar.group.quaternion;
+    const rawCarForward = this._rawCarForward.set(0, 0, 1).applyQuaternion(rawCarQuat).normalize();
+    const up = this._up;
+
+    // =========================================================================
+    // HỆ TRỤC TIM ĐƯỜNG THUẦN KHIẾT (PURE DRIFT-FREE TRACK CENTERLINE GIMBAL)
+    // Tách biệt 100% góc drift / lạng lách của xe khỏi camera truyền hình!
+    // Khi xe drift nghiêng 15° hay đảo làn, máy quay vẫn lướt êm chuẩn đường đua F1 TV thực tế.
+    // =========================================================================
+    const carU = getSafeCurveU(targetCar.state.lapProgress);
+    const roadCenterPos = this.trackCurve ? safeGetPointAt(this.trackCurve, carU) : carPos;
+    const roadTangent = this.trackCurve ? safeGetTangentAt(this.trackCurve, carU) : rawCarForward;
+
+    const gyroRight = this._gyroRight.crossVectors(up, roadTangent).normalize();
+    const gyroUp = this._gyroUp.crossVectors(roadTangent, gyroRight).normalize();
+    this._gyroBasis.makeBasis(gyroRight, gyroUp, roadTangent);
+    const targetGyroQuat = this._targetGyroQuat.setFromRotationMatrix(this._gyroBasis);
+    if (!this.hasGyroQuat || this.isFirstFrame) {
+      this.stabilizedOnboardQuat.copy(targetGyroQuat);
+      this.hasGyroQuat = true;
+    } else {
+      this.stabilizedOnboardQuat.slerp(targetGyroQuat, 1.0 - Math.exp(-8.5 * delta));
+    }
+    // carQuat cho mọi góc gắn thân xe dùng quaternion chống xoay theo drift!
+    const carQuat = this.stabilizedOnboardQuat;
 
     // Phân loại các góc quay gắn liền trên xe (Mounted Cameras) - Tuyệt đối không có độ trễ tịnh tiến
     const isRigidMounted = (
@@ -248,41 +379,39 @@ export class CameraDirector {
       this.currentMode === CameraMode.OVERTAKE_ACTION
     );
 
-    // Phân loại các góc quay bám sát xe (Tight Chase Cameras) - Khoảng cách tới xe cố định tuyệt đối, không co giãn giật cục
+    // Phân loại các góc quay bám sát xe (Tight Chase Cameras)
     const isTightChase = (
       this.currentMode === CameraMode.VERTICAL_PORTRAIT_OPTIMIZED ||
       this.currentMode === CameraMode.CINEMATIC_ORBIT
     );
 
-    // Hướng xoay mượt mà khóa đường chân trời cho góc quay bám đuôi (Gimbal Horizon-Locked Yaw)
-    const carForwardFlat = new THREE.Vector3(rawForward.x, 0, rawForward.z).normalize();
-    // Bộ lọc chuyển hướng xoay êm ái tự nhiên chuẩn Live Show truyền hình thực tế (Broadcast Gyro-Damping):
-    // TUYỆT ĐỐI KHÔNG xoay tức thì hay bẻ góc thô thiển theo khúc cua giống game.
-    // Khi xe ôm cua, xe sẽ rẽ trước trong khung hình, camera chuyển động xoay êm đẹp với quán tính tự nhiên.
-    const turnDampingSpeed = 2.4; // Tốc độ xoay đầm chắc chuẩn cần cẩu jib crane truyền hình F1
+    // Hướng xoay mượt mà khóa đường chân trời dựa theo tiếp tuyến đường đua (tuyệt đối không xoay giật khi xe drift!)
+    const roadForwardFlat = this._roadForwardFlat.set(roadTangent.x, 0, roadTangent.z).normalize();
+    const turnDampingSpeed = 2.4;
     const headingBlend = 1.0 - Math.exp(-turnDampingSpeed * delta);
     if (!this.hasSmoothHeading || this.isFirstFrame) {
-      this.smoothHeading.copy(carForwardFlat);
+      this.smoothHeading.copy(roadForwardFlat);
       this.hasSmoothHeading = true;
     } else {
-      this.smoothHeading.lerp(carForwardFlat, headingBlend).normalize();
+      this.smoothHeading.lerp(roadForwardFlat, headingBlend).normalize();
     }
-    const smoothRight = new THREE.Vector3().crossVectors(this.smoothHeading, up).normalize();
+    const smoothRight = this._smoothRight.crossVectors(this.smoothHeading, up).normalize();
 
-    // Hệ thống neo giảm chấn cho các góc quay từ xa trên không (Chopper / Sky Drone / Panoramic)
+    // Hệ thống neo tim đường KHÔNG ĐỘ TRỄ DỌC (Zero Longitudinal Lag)
+    // Khóa vị trí chính xác trên đường đua để triệt tiêu 100% hiện tượng xe giật lùi/co giãn theo frame-time!
     if (!this.hasStabilizedAnchor || this.isFirstFrame) {
-      this.stabilizedAnchorPos.copy(carPos);
-      this.stabilizedAnchorForward.copy(rawForward);
+      this.stabilizedAnchorPos.copy(roadCenterPos);
+      this.stabilizedAnchorForward.copy(roadTangent);
       this.hasStabilizedAnchor = true;
     } else {
-      const anchorSmoothSpeed = Math.min(1.0, delta * 20.0);
-      this.stabilizedAnchorPos.lerp(carPos, anchorSmoothSpeed);
-      this.stabilizedAnchorForward.lerp(rawForward, Math.min(1.0, delta * 14.0)).normalize();
+      const anchorFwdBlend = 1.0 - Math.exp(-4.5 * delta);
+      this.stabilizedAnchorPos.copy(roadCenterPos);
+      this.stabilizedAnchorForward.lerp(roadTangent, anchorFwdBlend).normalize();
     }
 
     const trackedPos = this.stabilizedAnchorPos;
     const forward = this.stabilizedAnchorForward;
-    const right = new THREE.Vector3().crossVectors(forward, up).normalize();
+    const right = this._right.crossVectors(forward, up).normalize();
     const currentSpeed = targetCar.state.speed || 0;
 
     // Tốc độ lerp máy quay (Smooth Damping factor)
@@ -291,59 +420,51 @@ export class CameraDirector {
     switch (this.currentMode) {
       // =========================================================================
       // GÓC QUAY TRỰC THĂNG TRUYỀN HÌNH TỪ XA (CHOPPER HELI CINEFLEX)
-      // Helicam 3 giai đoạn điện ảnh hoàn hảo bao quát cả 15-35 xe đua:
-      // - Giai đoạn 1 (0 -> 3.2s): Tăng tốc vút lên từ phía sau vượt xa phía trước ở độ cao +28m -> +36m
-      // - Giai đoạn 2 (3.2 -> 5.2s): Bay trước đoàn xe +60m -> +80m, quay 180° đón đoàn xe đang lao tới.
-      //   Nghiêng -10° đến -15°, tầm nhìn 200m+ thu trọn 15-35 xe cùng đại lộ và bầu trời, không bao giờ cắm đầu xuống đất.
-      // - Giai đoạn 3 (5.2 -> 8.5s): Dạt sang bên lề đường để cả đoàn xe lướt qua ống kính (flyby) và phóng vút về phía trước.
+      // - Giai đoạn 1 (0 -> 2.8s): Vút từ phía sau (-24m) vượt qua đầu đoàn xe lên trước (+62m) ở 24->36m
+      // - Giai đoạn 2 (2.8 -> 5.8s): Xoay 180° đón đầu đoàn xe ĐỒNG THỜI BAY VÚT LÊN CAO (36m -> 74m)!
+      // - Giai đoạn 3 (5.8 -> 8.5s): Lượn cao qua đỉnh đầu đoàn xe hướng ra phía sau (-26m)
       // =========================================================================
       case CameraMode.CHOPPER_HELI_CHASE: {
         const t = this.dwellTimer;
-        if (t < 3.2) {
-          // GIAI ĐOẠN 1 (0 -> 3.2s): Vút từ sau (-28m) vượt qua trên đỉnh đầu đoàn xe vươn xa phía trước (+65m)
-          const p1 = Math.min(1.0, Math.max(0.0, t / 3.2));
-          const fwdDist = THREE.MathUtils.lerp(-28.0, 65.0, p1);
-          const alt = THREE.MathUtils.lerp(28.0, 36.0, p1);
-          const side = THREE.MathUtils.lerp(12.0, 16.0, p1);
+        if (t < 2.8) {
+          const p1 = Math.min(1.0, Math.max(0.0, t / 2.8));
+          const ease1 = p1 * p1 * (3.0 - 2.0 * p1);
+          const fwdDist = THREE.MathUtils.lerp(-24.0, 62.0, ease1);
+          const alt = THREE.MathUtils.lerp(24.0, 36.0, ease1);
+          const side = THREE.MathUtils.lerp(10.0, 14.0, ease1);
 
-          camSmoothSpeed = 16.0;
           idealPos.copy(trackedPos)
             .addScaledVector(forward, fwdDist)
             .addScaledVector(right, side)
             .addScaledVector(up, alt);
-          lookTarget.copy(trackedPos).addScaledVector(forward, 15.0).addScaledVector(up, 1.5);
-        } else if (t < 5.2) {
-          // GIAI ĐOẠN 2 (3.2 -> 5.2s): Giữ cự ly bay trước đoàn đua (+65m -> +80m), quay 180° view đón đầu
-          // Ống kính góc nghiêng thoải mái chỉ -10° đến -15°, tầm nhìn xa 200m+ thu trọn 15-35 xe cùng đại lộ & bầu trời
-          const p2 = Math.min(1.0, Math.max(0.0, (t - 3.2) / 2.0));
-          const distAhead = THREE.MathUtils.lerp(65.0, 80.0, p2);
-          const alt = THREE.MathUtils.lerp(32.0, 36.0, p2);
-          const side = THREE.MathUtils.lerp(10.0, 6.0, p2);
+          lookTarget.copy(trackedPos).addScaledVector(forward, THREE.MathUtils.lerp(14.0, 6.0, ease1)).addScaledVector(up, 1.4);
+        } else if (t < 5.8) {
+          // GIAI ĐOẠN 2: Khi xoay ngược trở lại đón đầu đoàn xe -> ĐỒNG THỜI BAY VÚT LÊN CAO (36m -> 74m)!
+          const p2 = Math.min(1.0, Math.max(0.0, (t - 2.8) / 3.0));
+          const ease2 = p2 * p2 * (3.0 - 2.0 * p2);
+          const distAhead = THREE.MathUtils.lerp(62.0, 88.0, ease2);
+          const alt = THREE.MathUtils.lerp(36.0, 74.0, ease2);
+          const side = THREE.MathUtils.lerp(14.0, 4.0, ease2);
 
-          camSmoothSpeed = 14.0;
           idealPos.copy(trackedPos)
             .addScaledVector(forward, distAhead)
             .addScaledVector(right, side)
             .addScaledVector(up, alt);
-
-          // Nhìn ngược lại đoàn xe đang lao tới với độ nghiêng chỉ -10.7° (cự ly 200m+ dọc theo trục đường đua)
-          lookTarget.copy(idealPos)
-            .addScaledVector(forward, -200.0)
-            .addScaledVector(up, -38.0);
+          lookTarget.copy(trackedPos).addScaledVector(forward, THREE.MathUtils.lerp(6.0, 12.0, ease2)).addScaledVector(up, 1.2);
         } else {
-          // GIAI ĐOẠN 3 (5.2 -> 8.5s): Dạt sang bên lề đường (+16m -> +36m), cả đoàn xe lướt qua ống kính (flyby)
-          const p3 = Math.min(1.0, Math.max(0.0, (t - 5.2) / 3.3));
-          const fwdDist = THREE.MathUtils.lerp(55.0, -32.0, p3);
-          const alt = THREE.MathUtils.lerp(32.0, 24.0, p3);
-          const side = THREE.MathUtils.lerp(16.0, 36.0, p3);
+          // GIAI ĐOẠN 3: Từ độ cao 74m lướt êm qua trên đỉnh đoàn xe khi đoàn xe phóng qua bên dưới
+          const p3 = Math.min(1.0, Math.max(0.0, (t - 5.8) / 2.7));
+          const ease3 = p3 * p3 * (3.0 - 2.0 * p3);
+          const fwdDist = THREE.MathUtils.lerp(88.0, -26.0, ease3);
+          const alt = THREE.MathUtils.lerp(74.0, 52.0, ease3);
+          const side = THREE.MathUtils.lerp(4.0, 26.0, ease3);
 
-          camSmoothSpeed = 18.0;
           idealPos.copy(trackedPos)
             .addScaledVector(forward, fwdDist)
             .addScaledVector(right, side)
             .addScaledVector(up, alt);
           lookTarget.copy(trackedPos)
-            .addScaledVector(forward, THREE.MathUtils.lerp(5.0, 40.0, p3))
+            .addScaledVector(forward, THREE.MathUtils.lerp(12.0, 26.0, ease3))
             .addScaledVector(up, 1.2);
         }
         break;
@@ -354,76 +475,141 @@ export class CameraDirector {
       // Drone FPV bay lướt đầm chắc, bắt trọn từng pha so kè
       // =========================================================================
       case CameraMode.SKY_DRONE_BROADCAST: {
-        camSmoothSpeed = 20.0;
         idealPos.copy(trackedPos)
           .addScaledVector(forward, -14.0)
-          .addScaledVector(right, 3.0)
-          .addScaledVector(up, 5.8);
-        lookTarget.copy(trackedPos).addScaledVector(forward, 12.0).addScaledVector(up, 1.0);
+          .addScaledVector(right, 2.5)
+          .addScaledVector(up, 5.5);
+        lookTarget.copy(trackedPos).addScaledVector(forward, 14.0).addScaledVector(up, 1.0);
         break;
       }
 
       // =========================================================================
-      // GÓC QUAY TOÀN CẢNH TỪ TRÊN CAO (PANORAMIC / GRANDSTAND)
-      // Dần dần lùi ra xa để bao quát trọn đường đua và đoàn đua
+      // GÓC QUAY TOÀN CẢNH TỪ TRÊN CAO NHÌN XUỐNG (PANORAMIC - 4 KIỂU CAO 82-126m)
+      // Góc nhìn DỐC TỪ TRÊN CAO XUỐNG (60°-80°), KHÔNG nằm ngang bên hông! Tuyệt đối 0% rung.
       // =========================================================================
       case CameraMode.PANORAMIC: {
-        camSmoothSpeed = 16.0;
-        const pullBackProgress = Math.min(1.0, this.dwellTimer / 8.0);
-        const dist = THREE.MathUtils.lerp(18.0, 75.0, pullBackProgress);
-        const alt = THREE.MathUtils.lerp(18.0, 55.0, pullBackProgress);
-        const side = THREE.MathUtils.lerp(14.0, 35.0, pullBackProgress);
-        idealPos.copy(trackedPos)
-          .addScaledVector(forward, -dist)
-          .addScaledVector(right, side)
-          .addScaledVector(up, alt);
-        lookTarget.copy(trackedPos).addScaledVector(forward, 15.0).addScaledVector(up, 1.0);
+        const p = Math.min(1.0, Math.max(0.0, this.dwellTimer / 6.5));
+        const ease = p * p * (3.0 - 2.0 * p);
+        const s = this.panoramicSideSign;
+
+        if (this.panoramicVariant === 0) {
+          // Kiểu 0: Đài bay tĩnh trên bầu trời phía trước khúc cua ở độ cao 92m, nhìn dốc xuống đoàn xe đi qua bên dưới
+          const distToPan = trackedPos.distanceTo(this.panoramicStationPos);
+          if (!this.hasPanoramicStationPos || distToPan > 420.0) {
+            const aheadU = getSafeCurveU(carU + 130.0 / this.trackLength);
+            if (this.trackCurve) {
+              this._panAheadPoint.copy(safeGetPointAt(this.trackCurve, aheadU));
+              this._panAheadTan.copy(safeGetTangentAt(this.trackCurve, aheadU));
+            } else {
+              this._panAheadPoint.copy(trackedPos).addScaledVector(forward, 130.0);
+              this._panAheadTan.copy(forward);
+            }
+            this._panAheadRight.crossVectors(this._panAheadTan, up).normalize();
+            this.panoramicStationPos.copy(this._panAheadPoint)
+              .addScaledVector(this._panAheadRight, s * 22.0)
+              .addScaledVector(up, 94.0);
+            this.hasPanoramicStationPos = true;
+          }
+          idealPos.copy(this.panoramicStationPos).addScaledVector(up, ease * 10.0);
+          lookTarget.copy(trackedPos).addScaledVector(forward, 18.0).addScaledVector(up, 1.0);
+        } else if (this.panoramicVariant === 1) {
+          // Kiểu 1: Cáp treo Skycam trên đỉnh đường đua (cao 86-106m), quét ngang qua trục giữa mặt đường từ trên cao
+          const crossSide = THREE.MathUtils.lerp(34.0 * s, -34.0 * s, ease);
+          const sweepFwd = THREE.MathUtils.lerp(42.0, -34.0, ease);
+          const alt = THREE.MathUtils.lerp(86.0, 106.0, ease);
+          idealPos.copy(trackedPos)
+            .addScaledVector(forward, sweepFwd)
+            .addScaledVector(right, crossSide)
+            .addScaledVector(up, alt);
+          lookTarget.copy(trackedPos).addScaledVector(forward, 20.0).addScaledVector(up, 1.0);
+        } else if (this.panoramicVariant === 2) {
+          // Kiểu 2: Bird's-Eye cao vút (96m - 126m) nhìn thẳng xuống khúc cua uốn lượn & toàn bộ đoàn xe
+          const alt = THREE.MathUtils.lerp(96.0, 126.0, ease);
+          const crossSide = THREE.MathUtils.lerp(22.0 * s, -22.0 * s, ease);
+          const fwdSweep = THREE.MathUtils.lerp(-30.0, 35.0, ease);
+          idealPos.copy(trackedPos)
+            .addScaledVector(forward, fwdSweep)
+            .addScaledVector(right, crossSide)
+            .addScaledVector(up, alt);
+          lookTarget.copy(trackedPos).addScaledVector(forward, 24.0).addScaledVector(up, 0.8);
+        } else {
+          // Kiểu 3: Bay vòng cung hẹp trên đỉnh cao (84-114m, bán kính ngang 28-40m) nhìn dốc 68° xuống đoàn đua
+          const az = this.panoramicStartAz + ease * this.panoramicOrbitDir * this.panoramicSweepSpan;
+          const radius = THREE.MathUtils.lerp(28.0, 40.0, ease);
+          const alt = THREE.MathUtils.lerp(84.0, 114.0, ease);
+          idealPos.copy(trackedPos)
+            .addScaledVector(forward, Math.cos(az) * radius)
+            .addScaledVector(right, Math.sin(az) * radius)
+            .addScaledVector(up, alt);
+          lookTarget.copy(trackedPos).addScaledVector(forward, 20.0).addScaledVector(up, 1.0);
+        }
         break;
       }
 
       // =========================================================================
-      // 1. MÁY QUAY TELEPHOTO VEN ĐƯỜNG LIA THEO XE (TRACKSIDE TELEPHOTO 85mm)
-      // Máy quay ĐỨNG YÊN 100% Ở VEN ĐƯỜNG KHÔNG DI CHUYỂN, chỉ xoay ống kính lia theo đoàn xe đi qua
+      // GÓC QUAY TOÀN CẢNH THỂ THAO TRÊN CAO (HIGH_SPORTS_PANORAMA)
+      // Chuẩn phát sóng thể thao Sky-Blimp / Stadium Cam trên cao 95-122m quan sát trọn đoàn đua qua các khúc cua
+      // Tuyệt đối 0% rung!
       // =========================================================================
-      case CameraMode.TRACKSIDE_TELEPHOTO: {
-        const distToStation = trackedPos.distanceTo(this.tracksideStationPos);
-        if (!this.hasStationPos || distToStation > 160.0) {
-          this.tracksideStationPos.copy(trackedPos)
-            .addScaledVector(right, 14.5)
-            .addScaledVector(forward, 55.0);
-          this.tracksideStationPos.y = trackedPos.y + 2.8;
-          this.hasStationPos = true;
+      case CameraMode.HIGH_SPORTS_PANORAMA: {
+        const p = Math.min(1.0, Math.max(0.0, this.dwellTimer / 6.5));
+        const ease = p * p * (3.0 - 2.0 * p);
+        const s = this.panoramicSideSign;
+        const alt = THREE.MathUtils.lerp(96.0, 120.0, Math.sin(ease * Math.PI * 0.5));
+        const fwd = THREE.MathUtils.lerp(42.0, -24.0, ease);
+        const side = THREE.MathUtils.lerp(24.0 * s, -16.0 * s, ease);
+
+        idealPos.copy(trackedPos)
+          .addScaledVector(forward, fwd)
+          .addScaledVector(right, side)
+          .addScaledVector(up, alt);
+
+        // Ngắm dọc theo tim đường phía trước đoàn xe để thấy trọn cung đường & 15-35 xe đang so kè
+        if (this.trackCurve) {
+          const lookU = getSafeCurveU(carU + 18.0 / this.trackLength);
+          safeGetPointAt(this.trackCurve, lookU, this._curveSampleLook);
+          lookTarget.copy(this._curveSampleLook).addScaledVector(up, 1.0);
+        } else {
+          lookTarget.copy(trackedPos).addScaledVector(forward, 18.0).addScaledVector(up, 1.0);
         }
-        idealPos.copy(this.tracksideStationPos); // Đứng yên tuyệt đối ở ven đường!
-        lookTarget.copy(trackedPos).addScaledVector(up, 0.85); // Chỉ lia ống kính theo xe
         break;
       }
 
       // =========================================================================
       // 2. TOÀN CẢNH SO KÈ NHIỀU XE (MULTI_CAR_OVERTAKE_WIDE)
-      // Góc quay chéo từ trên cao vừa phải, bắt trọn từng pha đảo làn và so kè tay đôi
+      // Tiến lại gần cách xe ~5 mét và đặt chéo góc trước-bên quay ngược về sau chếch 45 độ,
+      // thu trọn thân xe cận cảnh cùng đoàn xe so kè bám đuổi phía sau!
       // =========================================================================
       case CameraMode.MULTI_CAR_OVERTAKE_WIDE: {
-        camSmoothSpeed = 12.0;
-        idealPos.copy(trackedPos)
-          .addScaledVector(right, 24.0)
-          .addScaledVector(forward, -22.0)
-          .addScaledVector(up, 12.5);
-        lookTarget.copy(trackedPos).addScaledVector(forward, 15.0).addScaledVector(up, 1.1);
+        const dur = Math.max(4.5, this.nextSwitchTime || 5.5);
+        const p = Math.min(1.0, Math.max(0.0, this.dwellTimer / dur));
+        const ease = p * p * (3.0 - 2.0 * p);
+        const inwardSign = targetCar.state.lateralOffset > 0 ? -1 : 1;
+
+        const side = inwardSign * THREE.MathUtils.lerp(3.55, 3.85, ease);
+        const fwd = THREE.MathUtils.lerp(3.15, 2.75, ease);
+        const alt = THREE.MathUtils.lerp(2.25, 2.55, ease);
+        const lookFwd = THREE.MathUtils.lerp(-0.6, -1.15, ease);
+
+        idealPos.copy(carPos).add(this._tmpLocalOffset.set(side, alt, fwd).applyQuaternion(carQuat));
+        lookTarget.copy(carPos).add(this._tmpLocalOffset.set(0, 0.92, lookFwd).applyQuaternion(carQuat));
         break;
       }
 
       // =========================================================================
       // 3. GÓC ĐÓN ĐẦU NHIỀU XE ĐUA (MULTI_CAR_FRONT_FACING)
-      // Đón đầu đoàn xe, quay trực diện vào xe và nhóm xe phía sau đang lao tới
+      // Đặt ngay bên trên & phía sau 1 chiếc xe nhóm đầu, quay ngược về sau đón trọn cả đoàn đua
+      // đang lao tới giữa màn hình — KHÔNG quay 1 chiếc xe từ đằng xa và KHÔNG xoay ngang!
       // =========================================================================
       case CameraMode.MULTI_CAR_FRONT_FACING: {
-        camSmoothSpeed = 16.0;
-        idealPos.copy(trackedPos)
-          .addScaledVector(forward, 38.0)
-          .addScaledVector(up, 5.5)
-          .addScaledVector(right, -3.0);
-        lookTarget.copy(trackedPos).addScaledVector(forward, -4.0).addScaledVector(up, 1.0);
+        idealPos.copy(carPos).add(this._tmpLocalOffset.set(0, 2.25, -2.05).applyQuaternion(carQuat));
+        if (this.trackCurve) {
+          const behindLookU = getSafeCurveU(carU - 34.0 / this.trackLength);
+          safeGetPointAt(this.trackCurve, behindLookU, this._curveSampleLook);
+          lookTarget.copy(this._curveSampleLook).addScaledVector(up, 1.15);
+        } else {
+          lookTarget.copy(carPos).add(this._tmpLocalOffset.set(0, 1.15, -34.0).applyQuaternion(carQuat));
+        }
         break;
       }
 
@@ -432,7 +618,6 @@ export class CameraDirector {
       // Đặt ngay mép vỉa cua (apex curb), đón xe ôm cua rõ nét với độ ổn định cao
       // =========================================================================
       case CameraMode.TRACKSIDE_APEX: {
-        camSmoothSpeed = 25.0;
         idealPos.copy(trackedPos)
           .addScaledVector(forward, 6.0)
           .addScaledVector(right, -4.5)
@@ -443,16 +628,19 @@ export class CameraDirector {
       }
 
       // =========================================================================
-      // 5. BÁM ĐUÔI ĐOÀN XE NGHẸT THỞ (MULTI_CAR_PACK_CHASE)
-      // Cách sau xe 35m, trên cao 8.0m (hạ thấp 1.5m theo yêu cầu) bao quát cận cảnh các xe so kè và đảo làn bứt tốc
+      // 5. BÁM ĐUÔI ĐOÀN XE (MULTI_CAR_PACK_CHASE)
+      // Tiến lên trước mũi xe 2 mét (z = +3.65m so với tâm xe dài 3.3m) ở độ cao nóc +1m (1.95m),
+      // tuyệt đối KHÔNG nhìn thấy chiếc xe đang gắn camera, mở trọn tầm nhìn tốc độ xé gió bám đuôi đoàn xe phía trước!
       // =========================================================================
       case CameraMode.MULTI_CAR_PACK_CHASE: {
-        camSmoothSpeed = 16.0;
-        idealPos.copy(trackedPos)
-          .addScaledVector(forward, -35.0)
-          .addScaledVector(up, 8.0)
-          .addScaledVector(right, 3.2);
-        lookTarget.copy(trackedPos).addScaledVector(forward, 25.0).addScaledVector(up, 1.0);
+        idealPos.copy(carPos).add(this._tmpLocalOffset.set(0, 1.95, 3.65).applyQuaternion(carQuat));
+        if (this.trackCurve) {
+          const aheadLookU = getSafeCurveU(carU + 26.0 / this.trackLength);
+          safeGetPointAt(this.trackCurve, aheadLookU, this._curveSampleLook);
+          lookTarget.copy(this._curveSampleLook).addScaledVector(up, 1.0);
+        } else {
+          lookTarget.copy(carPos).add(this._tmpLocalOffset.set(0, 1.0, 26.0).applyQuaternion(carQuat));
+        }
         break;
       }
 
@@ -532,8 +720,8 @@ export class CameraDirector {
       // =========================================================================
       case CameraMode.FENDER_WHEEL_LOOK: {
         camSmoothSpeed = 0;
-        idealPos.copy(carPos).add(new THREE.Vector3(1.85, 0.75, 1.25).applyQuaternion(carQuat));
-        lookTarget.copy(carPos).add(new THREE.Vector3(0.8, 0.45, -1.8).applyQuaternion(carQuat));
+        idealPos.copy(carPos).add(this._tmpLocalOffset.set(1.85, 0.75, 1.25).applyQuaternion(carQuat));
+        lookTarget.copy(carPos).add(this._tmpLocalOffset.set(0.8, 0.45, -1.8).applyQuaternion(carQuat));
         break;
       }
 
@@ -543,8 +731,8 @@ export class CameraDirector {
       // =========================================================================
       case CameraMode.WING_REAR_LOOK: {
         camSmoothSpeed = 0;
-        idealPos.copy(carPos).add(new THREE.Vector3(0, 1.45, 3.85).applyQuaternion(carQuat));
-        lookTarget.copy(carPos).add(new THREE.Vector3(0, 1.05, 35.0).applyQuaternion(carQuat));
+        idealPos.copy(carPos).add(this._tmpLocalOffset.set(0, 1.45, 3.85).applyQuaternion(carQuat));
+        lookTarget.copy(carPos).add(this._tmpLocalOffset.set(0, 1.05, 35.0).applyQuaternion(carQuat));
         break;
       }
 
@@ -566,8 +754,8 @@ export class CameraDirector {
       // =========================================================================
       case CameraMode.COCKPIT_FIRST_PERSON: {
         camSmoothSpeed = 0;
-        idealPos.copy(carPos).add(new THREE.Vector3(0, 1.05, 2.15).applyQuaternion(carQuat));
-        lookTarget.copy(carPos).add(new THREE.Vector3(0, 0.95, 35.0).applyQuaternion(carQuat));
+        idealPos.copy(carPos).add(this._tmpLocalOffset.set(0, 1.05, 2.15).applyQuaternion(carQuat));
+        lookTarget.copy(carPos).add(this._tmpLocalOffset.set(0, 0.95, 35.0).applyQuaternion(carQuat));
         break;
       }
 
@@ -577,8 +765,8 @@ export class CameraDirector {
       // =========================================================================
       case CameraMode.BUMPER_FIRST_PERSON: {
         camSmoothSpeed = 0;
-        idealPos.copy(carPos).add(new THREE.Vector3(0, 0.55, 1.85).applyQuaternion(carQuat));
-        lookTarget.copy(carPos).add(new THREE.Vector3(0, 0.55, 40.0).applyQuaternion(carQuat));
+        idealPos.copy(carPos).add(this._tmpLocalOffset.set(0, 0.55, 1.85).applyQuaternion(carQuat));
+        lookTarget.copy(carPos).add(this._tmpLocalOffset.set(0, 0.55, 40.0).applyQuaternion(carQuat));
         break;
       }
 
@@ -589,16 +777,16 @@ export class CameraDirector {
       // 2. Mui Xe / Cockpit: Gắn trực tiếp nắp capo, nhìn thẳng đường đua siêu nét
       case CameraMode.HOOD: {
         camSmoothSpeed = 0;
-        idealPos.copy(carPos).add(new THREE.Vector3(0, 0.95, 1.1).applyQuaternion(carQuat));
-        lookTarget.copy(carPos).add(new THREE.Vector3(0, 0.90, 40.0).applyQuaternion(carQuat));
+        idealPos.copy(carPos).add(this._tmpLocalOffset.set(0, 0.95, 1.1).applyQuaternion(carQuat));
+        lookTarget.copy(carPos).add(this._tmpLocalOffset.set(0, 0.90, 40.0).applyQuaternion(carQuat));
         break;
       }
 
       // 4. Bên Hông Xe: Gắn vào bên hông xe, quay ngược 45 độ về phía sau
       case CameraMode.SIDE_PROFILE: {
         camSmoothSpeed = 0;
-        idealPos.copy(carPos).add(new THREE.Vector3(1.75, 1.15, 0.0).applyQuaternion(carQuat));
-        lookTarget.copy(carPos).add(new THREE.Vector3(1.75 + 15.0, 1.05, -15.0).applyQuaternion(carQuat));
+        idealPos.copy(carPos).add(this._tmpLocalOffset.set(1.75, 1.15, 0.0).applyQuaternion(carQuat));
+        lookTarget.copy(carPos).add(this._tmpLocalOffset.set(1.75 + 15.0, 1.05, -15.0).applyQuaternion(carQuat));
         break;
       }
 
@@ -613,8 +801,8 @@ export class CameraDirector {
       // 8. Góc Vượt Mặt: Gắn trực tiếp vào đuôi xe, quay ngược 180 độ về phía sau
       case CameraMode.OVERTAKE_ACTION: {
         camSmoothSpeed = 0;
-        idealPos.copy(carPos).add(new THREE.Vector3(0, 1.25, -1.9).applyQuaternion(carQuat));
-        lookTarget.copy(carPos).add(new THREE.Vector3(0, 1.05, -50.0).applyQuaternion(carQuat));
+        idealPos.copy(carPos).add(this._tmpLocalOffset.set(0, 1.25, -1.9).applyQuaternion(carQuat));
+        lookTarget.copy(carPos).add(this._tmpLocalOffset.set(0, 1.05, -50.0).applyQuaternion(carQuat));
         break;
       }
 
@@ -649,152 +837,186 @@ export class CameraDirector {
       this.isFirstFrame = false;
     } else {
       const isStationaryTrackside = (
-        this.currentMode === CameraMode.TRACKSIDE_TELEPHOTO ||
         this.currentMode === CameraMode.SPECTATOR_TRACKSIDE
       );
 
-      if (isRigidMounted) {
-        // CÁC GÓC GẮN TRỰC TIẾP TRÊN XE (HOOD, COCKPIT, BUMPER, FENDER, WING):
-        // Khóa trực tiếp 100% vào thân xe theo tọa độ và góc nghiêng cục bộ
-        this.smoothedCamPos.copy(idealPos);
-        this.smoothedLookTarget.copy(lookTarget);
-      } else if (isStationaryTrackside) {
+      if (isStationaryTrackside) {
         // Máy quay ven đường đứng yên hoàn toàn 100% không di chuyển, xoay ống kính lia theo đoàn xe chuẩn xác
         this.smoothedCamPos.copy(idealPos);
         this.smoothedLookTarget.lerp(lookTarget, 1.0 - Math.exp(-22.0 * delta));
-      } else if (isTightChase) {
-        // CÁC GÓC BÁM ĐUÔI VÀ CẬN CẢNH (LOW_GROUND, BEHIND, VERTICAL_PORTRAIT, OVERTAKE_ACTION, COLLISION_DRIFT):
-        // Đồng bộ hóa 100% vị trí máy quay và tâm nhìn để triệt tiêu vĩnh viễn rung giật/co giãn góc nhìn
+      } else {
+        // Đồng bộ hóa 100% vị trí máy quay và tâm nhìn theo tim đường thực tế để triệt tiêu vĩnh viễn xe giật / co giãn góc nhìn
         this.smoothedCamPos.copy(idealPos);
         this.smoothedLookTarget.copy(lookTarget);
-      } else {
-        // GÓC XA TRÊN KHÔNG (CHOPPER, DRONE, PANORAMIC, MULTI_CAR_PACK_CHASE, MULTI_CAR_OVERTAKE):
-        // Bay lượn tự do đầm chắc trên cao, góc máy khóa chặt tâm đoàn xe chuẩn truyền hình thực tế F1
-        const posSmooth = 1.0 - Math.exp(-14.0 * delta);
-        const lookSmooth = 1.0 - Math.exp(-20.0 * delta);
-        this.smoothedCamPos.lerp(idealPos, posSmooth);
-        this.smoothedLookTarget.lerp(lookTarget, lookSmooth);
       }
     }
 
     // =========================================================================
     // DYNAMIC FOV & SPEED SENSATION:
-    // Tiêu cự chuẩn từng thể loại: 85mm cho Telephoto ven đường, mở rộng xé gió cho Chase
+    // Tiêu cự chuẩn từng thể loại: 85mm cho Telephoto ven đường, mở rộng xé gió cho Chase & Front Facing
     // =========================================================================
     const speedRatio = Math.min(1.0, currentSpeed / 610);
     let modeBaseFov = this.BASE_FOV;
-    let speedFovBoost = Math.pow(speedRatio, 1.1) * 22.0;
+    let speedFovBoost = Math.pow(speedRatio, 1.1) * 24.0;
 
     if (this.currentMode === CameraMode.CHOPPER_HELI_CHASE) {
-      if (this.dwellTimer >= 3.2 && this.dwellTimer < 5.2) {
-        modeBaseFov = 46.0; // Cineflex telephoto đón trọn 15-35 xe cùng đại lộ và bầu trời
+      if (this.dwellTimer >= 2.8 && this.dwellTimer < 5.8) {
+        modeBaseFov = 50.0; // Khi xoay ngược & bay lên cao mở góc bao quát toàn đoàn xe & đại lộ
       } else {
-        modeBaseFov = 52.0;
+        modeBaseFov = 54.0;
       }
       speedFovBoost = Math.pow(speedRatio, 1.1) * 8.0;
     } else if (this.currentMode === CameraMode.SKY_DRONE_BROADCAST) {
-      modeBaseFov = 68.0; // Góc Drone FPV lướt sát
-      speedFovBoost = Math.pow(speedRatio, 1.1) * 16.0;
+      modeBaseFov = 70.0; // Góc Drone FPV lướt sát xé gió
+      speedFovBoost = Math.pow(speedRatio, 1.1) * 20.0;
     } else if (this.currentMode === CameraMode.PANORAMIC) {
-      modeBaseFov = 48.0;
-      speedFovBoost = Math.pow(speedRatio, 1.1) * 8.0;
+      modeBaseFov = 58.0; // Góc trên cao nhìn xuống bao quát toàn cảnh đường đua & đoàn xe
+      speedFovBoost = Math.pow(speedRatio, 1.1) * 4.0;
+    } else if (this.currentMode === CameraMode.HIGH_SPORTS_PANORAMA) {
+      modeBaseFov = 52.0; // Góc thể thao trên cao chuẩn F1/Sky-Blimp quan sát trọn đoàn đua
+      speedFovBoost = Math.pow(speedRatio, 1.1) * 4.0;
     } else if (this.currentMode === CameraMode.VERTICAL_PORTRAIT_OPTIMIZED) {
-      modeBaseFov = 64.0; // Khung hình dọc 9:16 cảm nhận tốc độ lướt
-      speedFovBoost = Math.pow(speedRatio, 1.1) * 18.0;
+      modeBaseFov = 66.0; // Khung hình dọc 9:16 cảm nhận tốc độ lướt
+      speedFovBoost = Math.pow(speedRatio, 1.1) * 20.0;
     } else if (this.currentMode === CameraMode.KERB_CAM_GROUND) {
-      modeBaseFov = 66.0;
-      speedFovBoost = Math.pow(speedRatio, 1.1) * 16.0;
+      modeBaseFov = 68.0;
+      speedFovBoost = Math.pow(speedRatio, 1.1) * 18.0;
     } else if (this.currentMode === CameraMode.MULTI_CAR_OVERTAKE_WIDE) {
-      modeBaseFov = 58.0;
-      speedFovBoost = Math.pow(speedRatio, 1.1) * 12.0;
+      modeBaseFov = 60.0;
+      speedFovBoost = Math.pow(speedRatio, 1.1) * 14.0;
     } else if (this.currentMode === CameraMode.MULTI_CAR_FRONT_FACING) {
-      modeBaseFov = 66.0;
+      modeBaseFov = 66.0; // Tiêu cự nền 66°, mở rộng tới 80° khi lao tới xé gió hút khung hình
       speedFovBoost = Math.pow(speedRatio, 1.1) * 14.0;
     } else if (this.currentMode === CameraMode.MULTI_CAR_PACK_CHASE) {
-      modeBaseFov = 62.0;
-      speedFovBoost = Math.pow(speedRatio, 1.1) * 15.0;
+      modeBaseFov = 72.0; // Góc sát nóc xe 1m mở rộng 72° -> 92° tăng tối đa cảm giác tốc độ mặt đường
+      speedFovBoost = Math.pow(speedRatio, 1.1) * 20.0;
     } else if (this.currentMode === CameraMode.SIDE_PROFILE) {
       modeBaseFov = 72.0;
-      speedFovBoost = Math.pow(speedRatio, 1.1) * 16.0;
-    } else if (this.currentMode === CameraMode.OVERTAKE_ACTION) {
-      modeBaseFov = 74.0;
       speedFovBoost = Math.pow(speedRatio, 1.1) * 18.0;
+    } else if (this.currentMode === CameraMode.OVERTAKE_ACTION) {
+      modeBaseFov = 76.0;
+      speedFovBoost = Math.pow(speedRatio, 1.1) * 22.0;
     } else if (this.currentMode === CameraMode.SPECTATOR_TRACKSIDE) {
       const distToCam = this.smoothedCamPos.distanceTo(trackedPos);
       const zoomFactor = THREE.MathUtils.clamp((distToCam - 15.0) / 100.0, 0.0, 1.0);
       modeBaseFov = THREE.MathUtils.lerp(58.0, 22.0, zoomFactor);
       speedFovBoost = Math.pow(speedRatio, 1.2) * 6.0;
     } else if (this.currentMode === CameraMode.COCKPIT_FIRST_PERSON) {
-      modeBaseFov = 82.0; // Khoang lái góc rộng
-      speedFovBoost = Math.pow(speedRatio, 1.1) * 25.0;
+      modeBaseFov = 84.0; // Khoang lái góc rộng
+      speedFovBoost = Math.pow(speedRatio, 1.1) * 26.0;
     } else if (this.currentMode === CameraMode.BUMPER_FIRST_PERSON) {
-      modeBaseFov = 90.0; // Góc cản trước xé gió siêu tốc
+      modeBaseFov = 92.0; // Góc cản trước xé gió siêu tốc
       speedFovBoost = Math.pow(speedRatio, 1.1) * 28.0;
-    } else if (this.currentMode === CameraMode.TRACKSIDE_TELEPHOTO) {
-      modeBaseFov = 32.0; 
-      speedFovBoost = Math.pow(speedRatio, 1.2) * 6.0;
     } else if (this.currentMode === CameraMode.TRACKSIDE_APEX) {
-      modeBaseFov = 68.0; 
-      speedFovBoost = Math.pow(speedRatio, 1.1) * 18.0;
+      modeBaseFov = 70.0; 
+      speedFovBoost = Math.pow(speedRatio, 1.1) * 20.0;
     } else if (this.currentMode === CameraMode.CINEMATIC_ORBIT) {
       modeBaseFov = 68.0; 
-      speedFovBoost = Math.pow(speedRatio, 1.1) * 14.0;
+      speedFovBoost = Math.pow(speedRatio, 1.1) * 16.0;
     } else if (this.currentMode === CameraMode.PASSING_STATIONARY) {
       modeBaseFov = 78.0; 
-      speedFovBoost = Math.pow(speedRatio, 1.1) * 22.0;
+      speedFovBoost = Math.pow(speedRatio, 1.1) * 24.0;
     } else if (this.currentMode === CameraMode.TUNNEL_CEILING_FAST) {
       modeBaseFov = 78.0;
-      speedFovBoost = Math.pow(speedRatio, 1.1) * 18.0;
+      speedFovBoost = Math.pow(speedRatio, 1.1) * 20.0;
     } else if (this.currentMode === CameraMode.FENDER_WHEEL_LOOK || this.currentMode === CameraMode.WING_REAR_LOOK) {
-      modeBaseFov = 76.0;
-      speedFovBoost = Math.pow(speedRatio, 1.1) * 18.0;
+      modeBaseFov = 78.0;
+      speedFovBoost = Math.pow(speedRatio, 1.1) * 20.0;
     }
 
     const targetFov = modeBaseFov + speedFovBoost;
     this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, Math.min(1.0, delta * 6.0));
     this.camera.updateProjectionMatrix();
 
-    // VI CHẤN KHÍ ĐỘNG HỌC TỐC ĐỘ CAO (High-Speed Aerodynamic Vibration & Buffeting)
-    let finalCamPos = this.smoothedCamPos.clone();
+    // =========================================================================
+    // HIỆU ỨNG RUNG TỐC ĐỘ CAO KHÍ ĐỘNG HỌC (HIGH-SPEED AERODYNAMIC BUFFET)
+    // - KHÔNG rung nghiêng chân trời (0 roll)
+    // - Trực Thăng (CHOPPER_HELI_CHASE) & Toàn Cảnh (PANORAMIC / HIGH_SPORTS_PANORAMA) TUYỆT ĐỐI KHÔNG RUNG (0% shake)
+    // - Góc gắn thân xe / góc thứ nhất & các góc bám sát mặt đường rung tần số cao rõ nét cảm giác xé gió
+    // =========================================================================
+    const finalCamPos = this._finalCamPos.copy(this.smoothedCamPos);
+    const finalLookTarget = this._finalLookTarget.copy(this.smoothedLookTarget);
 
-    if (isRigidMounted) {
-      // TUYỆT ĐỐI KHÔNG CỘNG RUNG NGOẠI LỰC CHO CAMERA GẮN TRÊN XE (HOOD, COCKPIT, BUMPER, OVERTAKE_ACTION, SIDE_PROFILE, SIDE_CHASE_MULTI)
-      // Khóa 100% góc nhìn ổn định vào thân xe, loại bỏ hoàn toàn hiện tượng rung giật, lệch góc hay hỗn loạn
-    } else if (isTightChase) {
-      // 1. VI CHẤN CẬN CẢNH XE
-      if (currentSpeed > 260) {
-        const speedRatio = Math.min(1.0, (currentSpeed - 260) / 360);
-        const aeroBuffetIntensity = Math.pow(speedRatio, 1.25) * 0.048;
-        const aeroFreq1 = this.simulatedTime * 68.0;  // 68 Hz vi chấn khí động
-        const aeroFreq2 = this.simulatedTime * 124.0; // 124 Hz rung động cơ cao tần
-        const microBuffetX = (Math.sin(aeroFreq1) * 0.65 + Math.sin(aeroFreq2) * 0.35) * aeroBuffetIntensity;
-        const microBuffetY = (Math.cos(aeroFreq1 * 1.15) * 0.6 + Math.cos(aeroFreq2 * 0.85) * 0.4) * (aeroBuffetIntensity * 0.6);
-        
-        finalCamPos.addScaledVector(right, microBuffetX).addScaledVector(up, microBuffetY);
-      }
-    } else {
-      // 2. RUNG CUỘN GIÓ TRÊN KHÔNG & VEN ĐƯỜNG (Trực thăng Helicam, Flycam Drone, Telephoto ven đường)
-      // Tăng thông số chấn động lên 5 lần (từ 0.035 lên 0.175)
-      if (currentSpeed > 320) {
-        const shakeIntensity = Math.pow((currentSpeed - 320) / 300, 1.4) * 0.165;
+    const isAerialZeroShake = (
+      this.currentMode === CameraMode.CHOPPER_HELI_CHASE ||
+      this.currentMode === CameraMode.PANORAMIC ||
+      this.currentMode === CameraMode.HIGH_SPORTS_PANORAMA
+    );
+
+    if (!isAerialZeroShake && currentSpeed > 180) {
+      const speedNorm = Math.min(1.0, (currentSpeed - 180) / 400);
+      const shakeOffsetVec = this._shakeOffsetVec.set(0, 0, 0);
+
+      if (isRigidMounted) {
+        const carLocalRight = this._carLocalRight.set(1, 0, 0).applyQuaternion(carQuat);
+        const carLocalUp = this._carLocalUp.set(0, 1, 0).applyQuaternion(carQuat);
+        const engineIntensity = Math.pow(speedNorm, 1.15) * 0.145;
+        const engineTime = this.simulatedTime * 46.0;
+        const eShakeX = (Math.sin(engineTime * 1.13) + 0.55 * Math.sin(engineTime * 1.97) + 0.25 * Math.sin(engineTime * 3.11)) * engineIntensity;
+        const eShakeY = (Math.cos(engineTime * 1.41) + 0.55 * Math.cos(engineTime * 2.33) + 0.25 * Math.cos(engineTime * 3.47)) * engineIntensity * 0.72;
+        shakeOffsetVec.addScaledVector(carLocalRight, eShakeX).addScaledVector(carLocalUp, eShakeY);
+        finalCamPos.add(shakeOffsetVec);
+        finalLookTarget.addScaledVector(shakeOffsetVec, 0.28);
+      } else if (
+        this.currentMode === CameraMode.SPECTATOR_TRACKSIDE
+      ) {
+        const distToCar = finalCamPos.distanceTo(trackedPos);
+        const proximityFactor = THREE.MathUtils.clamp(1.0 - (distToCar - 4.0) / 34.0, 0.0, 1.0);
+        if (proximityFactor > 0.01) {
+          const tsIntensity = Math.pow(speedNorm, 1.2) * proximityFactor * 0.075;
+          const shakeTime = this.simulatedTime * 38.0;
+          const tsShakeX = (Math.sin(shakeTime * 1.1) + 0.5 * Math.sin(shakeTime * 1.87)) * tsIntensity;
+          const tsShakeY = (Math.cos(shakeTime * 1.37) + 0.5 * Math.cos(shakeTime * 2.23)) * tsIntensity * 0.65;
+          shakeOffsetVec.addScaledVector(right, tsShakeX).addScaledVector(up, tsShakeY);
+          finalCamPos.add(shakeOffsetVec);
+          finalLookTarget.addScaledVector(shakeOffsetVec, 0.80);
+        }
+      } else if (
+        this.currentMode === CameraMode.PASSING_STATIONARY ||
+        this.currentMode === CameraMode.TRACKSIDE_APEX ||
+        this.currentMode === CameraMode.PIT_WALL_BROADCAST ||
+        this.currentMode === CameraMode.KERB_CAM_GROUND
+      ) {
+        const distToCar = finalCamPos.distanceTo(trackedPos);
+        const proximityFactor = THREE.MathUtils.clamp(1.0 - (distToCar - 3.0) / 42.0, 0.25, 1.0);
+        const groundIntensity = Math.pow(speedNorm, 1.2) * proximityFactor * 0.12;
+        const shakeTime = this.simulatedTime * 40.0;
+        const gShakeX = (Math.sin(shakeTime * 1.1) + 0.5 * Math.sin(shakeTime * 1.87)) * groundIntensity;
+        const gShakeY = (Math.cos(shakeTime * 1.37) + 0.5 * Math.cos(shakeTime * 2.23)) * groundIntensity * 0.68;
+        shakeOffsetVec.addScaledVector(right, gShakeX).addScaledVector(up, gShakeY);
+        finalCamPos.add(shakeOffsetVec);
+        finalLookTarget.addScaledVector(shakeOffsetVec, 0.48);
+      } else if (this.currentMode === CameraMode.MULTI_CAR_FRONT_FACING) {
+        if (currentSpeed > 320) {
+          const frontSpeedNorm = Math.min(1.0, (currentSpeed - 320) / 280);
+          const frontIntensity = Math.pow(frontSpeedNorm, 1.1) * 0.165;
+          const frontShakeTime = this.simulatedTime * 38.0;
+          const fShakeX = (Math.sin(frontShakeTime * 1.13) + 0.5 * Math.sin(frontShakeTime * 1.97)) * frontIntensity;
+          const fShakeY = (Math.cos(frontShakeTime * 1.41) + 0.5 * Math.cos(frontShakeTime * 2.33)) * frontIntensity * 0.65;
+          shakeOffsetVec.addScaledVector(right, fShakeX).addScaledVector(up, fShakeY);
+          finalCamPos.add(shakeOffsetVec);
+          finalLookTarget.addScaledVector(shakeOffsetVec, 0.45);
+        }
+      } else {
+        const baseSpeedVib = Math.pow(speedNorm, 1.2) * 0.13;
         const shakeTime = this.simulatedTime * 38.0;
-        const shakeX = (Math.sin(shakeTime * 1.3) + Math.sin(shakeTime * 2.1)) * shakeIntensity;
-        const shakeY = (Math.cos(shakeTime * 1.7) + Math.cos(shakeTime * 2.7)) * shakeIntensity * 0.65;
-        finalCamPos.addScaledVector(right, shakeX).addScaledVector(up, shakeY);
+        const shakeX = (Math.sin(shakeTime * 1.1) + 0.5 * Math.sin(shakeTime * 1.87)) * baseSpeedVib;
+        const shakeY = (Math.cos(shakeTime * 1.37) + 0.5 * Math.cos(shakeTime * 2.23)) * baseSpeedVib * 0.66;
+        shakeOffsetVec.addScaledVector(right, shakeX).addScaledVector(up, shakeY);
+        finalCamPos.add(shakeOffsetVec);
+        finalLookTarget.addScaledVector(shakeOffsetVec, 0.52);
       }
     }
 
-    // Ổn định đường chân trời Gimbal F1 tuyệt đối:
-    // Với góc gắn cứng trên thân xe (Cockpit, Hood, Bumper, Fender, Wing), camera.up nghiêng đồng bộ cùng thân xe
-    // Với tất cả các góc quay khác (Chase, Helicopter, Drone, Trackside), camera.up luôn là [0, 1, 0] thẳng đứng
+    // Khóa đường chân trời chuẩn xác tuyệt đối (không nghiêng lắc camera)
     if (isRigidMounted) {
-      const carLocalUp = new THREE.Vector3(0, 1, 0).applyQuaternion(carQuat);
-      this.camera.up.copy(carLocalUp);
+      this._carLocalUp.set(0, 1, 0).applyQuaternion(carQuat);
+      this.camera.up.copy(this._carLocalUp);
     } else {
       this.camera.up.set(0, 1, 0);
     }
     this.camera.position.copy(finalCamPos);
-    this.camera.lookAt(this.smoothedLookTarget);
+    this.camera.lookAt(finalLookTarget);
 
     return this.currentMode;
   }
@@ -826,55 +1048,76 @@ export class CameraDirector {
       nextDuration = 4.5 + Math.random() * 1.5;
     }
 
-    // Nếu đang ở góc quay trực thăng, ghi nhận đã dùng 1 lần duy nhất trong chặng đua
+    // Ghi nhận các góc quay giới hạn tối đa 1 lần trong mỗi chặng đua
     if (this.currentMode === CameraMode.CHOPPER_HELI_CHASE) {
       this.hasUsedHelicopterInRace = true;
     }
+    if (this.currentMode === CameraMode.SPECTATOR_TRACKSIDE) {
+      this.hasUsedSpectatorInRace = true;
+    }
+    if (
+      this.currentMode === CameraMode.PANORAMIC ||
+      this.currentMode === CameraMode.HIGH_SPORTS_PANORAMA
+    ) {
+      this.hasUsedPanoramicInRace = true;
+    }
 
-    // Không cho phép các góc quay xuất hiện 2 lần liên tiếp hoặc gần nhau (sử dụng mảng lịch sử recentModes)
-    let available = chosenPool.filter(m => !this.recentModes.includes(m));
-    if (this.hasUsedTelephotoInRace) {
-      available = available.filter(m => m !== CameraMode.TRACKSIDE_TELEPHOTO);
-    }
-    if (this.hasUsedHelicopterInRace) {
-      available = available.filter(m => m !== CameraMode.CHOPPER_HELI_CHASE);
+    const isAllowedOnceFilter = (m: CameraMode) =>
+      (!this.hasUsedHelicopterInRace || m !== CameraMode.CHOPPER_HELI_CHASE) &&
+      (!this.hasUsedSpectatorInRace || m !== CameraMode.SPECTATOR_TRACKSIDE) &&
+      (!this.hasUsedPanoramicInRace || (m !== CameraMode.PANORAMIC && m !== CameraMode.HIGH_SPORTS_PANORAMA));
+
+    // Không cho phép các góc quay xuất hiện 2 lần liên tiếp hoặc gần nhau
+    let available = chosenPool.filter(m => !this.recentModes.includes(m) && isAllowedOnceFilter(m));
+    if (available.length === 0) {
+      available = chosenPool.filter(m => m !== this.currentMode && isAllowedOnceFilter(m));
     }
     if (available.length === 0) {
-      available = chosenPool.filter(m => m !== this.currentMode);
-      if (this.hasUsedTelephotoInRace) {
-        available = available.filter(m => m !== CameraMode.TRACKSIDE_TELEPHOTO);
-      }
-      if (this.hasUsedHelicopterInRace) {
-        available = available.filter(m => m !== CameraMode.CHOPPER_HELI_CHASE);
-      }
+      available = chosenPool.filter(isAllowedOnceFilter);
     }
     if (available.length === 0) {
-      available = chosenPool.filter(m => 
-        (!this.hasUsedTelephotoInRace || m !== CameraMode.TRACKSIDE_TELEPHOTO) &&
-        (!this.hasUsedHelicopterInRace || m !== CameraMode.CHOPPER_HELI_CHASE)
-      );
-    }
-    if (available.length === 0) {
-      available = [CameraMode.MULTI_CAR_PACK_CHASE, CameraMode.PANORAMIC, CameraMode.MULTI_CAR_FRONT_FACING];
+      available = [
+        CameraMode.MULTI_CAR_PACK_CHASE,
+        CameraMode.MULTI_CAR_FRONT_FACING,
+        CameraMode.SKY_DRONE_BROADCAST,
+        CameraMode.MULTI_CAR_OVERTAKE_WIDE
+      ];
     }
 
     const nextMode = available[Math.floor(Math.random() * available.length)];
     this.currentMode = nextMode;
     if (nextMode === CameraMode.CHOPPER_HELI_CHASE) {
-      // Góc quay trực thăng chỉ xuất hiện đúng 1 lần trong mỗi chặng đua
       this.hasUsedHelicopterInRace = true;
       nextDuration = 8.5;
-    } else if (nextMode === CameraMode.TRACKSIDE_TELEPHOTO) {
-      // Góc quay Telephoto lia xe chỉ xuất hiện 1 lần và đúng 2 giây
-      this.hasUsedTelephotoInRace = true;
-      nextDuration = 2.0;
+    } else if (nextMode === CameraMode.SPECTATOR_TRACKSIDE) {
+      this.hasUsedSpectatorInRace = true;
+      nextDuration = 5.0;
+    } else if (
+      nextMode === CameraMode.PANORAMIC ||
+      nextMode === CameraMode.HIGH_SPORTS_PANORAMA
+    ) {
+      this.hasUsedPanoramicInRace = true;
+      this.randomizePanoramicAngle();
+      nextDuration = 6.5;
     }
     this.nextSwitchTime = nextDuration;
     this.isFirstFrame = true; // Cắt góc chuẩn truyền hình F1 Live Show tức thì, không lia giật
 
-    // Khóa xe mục tiêu ổn định khi vào góc quay gắn đuôi xe hoặc hông xe so kè
+    // Khóa xe mục tiêu ổn định khi vào góc quay gắn đuôi xe, hông xe so kè, đón đầu hoặc bám đuôi trên nóc xe
     if (cars && cars.length > 0) {
-      if (nextMode === CameraMode.OVERTAKE_ACTION || nextMode === CameraMode.SIDE_PROFILE) {
+      if (nextMode === CameraMode.MULTI_CAR_FRONT_FACING) {
+        const frontPackCars = cars.filter(c => c.state.rank <= Math.min(2, cars.length));
+        const pool = frontPackCars.length > 0 ? frontPackCars : cars;
+        const chosen = pool[Math.floor(Math.random() * pool.length)] || cars[0];
+        this.currentTargetCarId = chosen.state.id;
+      } else if (nextMode === CameraMode.MULTI_CAR_PACK_CHASE && cars.length >= 4) {
+        const minChaseRank = Math.max(3, Math.floor(cars.length * 0.4));
+        const maxChaseRank = Math.max(minChaseRank, Math.ceil(cars.length * 0.85));
+        const chasePool = cars.filter(c => c.state.rank >= minChaseRank && c.state.rank <= maxChaseRank);
+        const pool = chasePool.length > 0 ? chasePool : cars;
+        const chosen = pool[Math.floor(Math.random() * pool.length)] || cars[0];
+        this.currentTargetCarId = chosen.state.id;
+      } else if (nextMode === CameraMode.OVERTAKE_ACTION || nextMode === CameraMode.SIDE_PROFILE) {
         const topCars = cars.slice(0, Math.min(3, cars.length));
         const chosen = topCars[Math.floor(Math.random() * topCars.length)] || cars[0];
         this.currentTargetCarId = chosen.state.id;

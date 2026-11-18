@@ -29,6 +29,7 @@ import {
 } from './commentaryVocabularyEn';
 
 import { getRaceStoryline } from './storylineEngine';
+import { createSeededPRNG, hashString32 } from '../utils/prng';
 
 export type CommentaryCategory =
   | 'START'
@@ -65,16 +66,14 @@ export interface ScheduledTimelineEvent {
   sampleRate?: number;
 }
 
-// Pseudo-random hash generator dựa trên Seed của từng Video
+// Bộ sinh ngẫu nhiên 32-bit entropy cao chống trùng lặp trên 10 triệu+ video
 function pseudoRandom(seed: number): number {
-  const x = Math.sin(seed++) * 10000;
-  return x - Math.floor(x);
+  return createSeededPRNG(seed, 49157).next();
 }
 
 function pickRandom<T>(array: T[], seed: number): T {
   if (!array || array.length === 0) return '' as any;
-  const idx = Math.floor(Math.abs(pseudoRandom(seed)) * array.length);
-  return array[idx % array.length];
+  return createSeededPRNG(seed, 196613).pick(array);
 }
 
 /**
@@ -136,9 +135,13 @@ export function generateDynamicCommentary(options: {
   rank?: number;
   lang?: 'vi' | 'en';
   storylineId?: number;
+  trackName?: string;
 }): GeneratedCommentaryLine {
   const lang = options.lang || 'vi';
-  const s = options.seed || Math.floor(Math.random() * 100000000);
+  const s = options.seed !== undefined
+    ? options.seed
+    : (Date.now() ^ Math.floor(Math.random() * 0x7fffffff));
+  const rng = createSeededPRNG(s, (options.instanceId || 1) * 7919 + hashString32(options.category || 'OVERTAKE'));
   const cat = options.category || 'OVERTAKE';
   const rawDriverName = options.driverName || 'Cristiano Ronaldo';
   const targetDriverName = options.targetDriver || 'Lionel Messi';
@@ -148,26 +151,27 @@ export function generateDynamicCommentary(options: {
 
   const speed = options.speedKmh
     ? Math.round(options.speedKmh)
-    : Math.round(450 + (pseudoRandom(s + 211) * 160));
+    : rng.int(450, 615);
   const speedClause = lang === 'en' ? `${speed} km/h (${Math.round(speed * 0.621371)} mph)` : `${speed} km/h`;
 
   const isFinish = cat === 'FINISH';
   const isStart = cat === 'START';
-  const templateIdx = Math.floor(Math.abs(pseudoRandom(s + 241)) * 10);
+  const templateIdx = rng.int(0, 9);
+  const trackTag = options.trackName ? (lang === 'en' ? `at ${options.trackName}` : `tại ${options.trackName}`) : '';
   let fullSentence = '';
 
   if (lang === 'en') {
     // ================= EN ENGLISH COMMENTARY GENERATION =================
-    const hook = pickRandom(MASSIVE_HOOKS_EN, s + 17);
-    const alias = pickRandom(profile.aliases, s + 31);
-    const targetAlias = pickRandom(targetProfile.aliases, s + 47);
-    const environment = pickRandom(TRACK_ENVIRONMENTS_EN, s + 61);
-    const tactical = pickRandom(TACTICAL_FLAVORS_EN, s + 79);
+    const hook = rng.pick(MASSIVE_HOOKS_EN);
+    const alias = rng.pick(profile.aliases);
+    const targetAlias = rng.pick(targetProfile.aliases);
+    const environment = trackTag || rng.pick(TRACK_ENVIRONMENTS_EN);
+    const tactical = rng.pick(TACTICAL_FLAVORS_EN);
     const actionList = MASSIVE_ACTIONS_EN[cat] || MASSIVE_ACTIONS_EN.OVERTAKE;
-    const action = pickRandom(actionList, s + 103);
-    const funnyStake = pickRandom(MASSIVE_FUNNY_STAKES_EN, s + 127);
-    const reaction = pickRandom(AUDIENCE_REACTIONS_EN, s + 151);
-    const outro = pickRandom(MASSIVE_OUTROS_EN, s + 181);
+    const action = rng.pick(actionList);
+    const funnyStake = rng.pick(MASSIVE_FUNNY_STAKES_EN);
+    const reaction = rng.pick(AUDIENCE_REACTIONS_EN);
+    const outro = rng.pick(MASSIVE_OUTROS_EN);
 
     if (isStart) {
       switch (templateIdx % 4) {
@@ -235,16 +239,16 @@ export function generateDynamicCommentary(options: {
     }
   } else {
     // ================= VI VIETNAMESE COMMENTARY GENERATION =================
-    const hook = pickRandom(MASSIVE_HOOKS, s + 17);
-    const alias = pickRandom(profile.aliases, s + 31);
-    const targetAlias = pickRandom(targetProfile.aliases, s + 47);
-    const environment = pickRandom(TRACK_ENVIRONMENTS, s + 61);
-    const tactical = pickRandom(TACTICAL_FLAVORS, s + 79);
+    const hook = rng.pick(MASSIVE_HOOKS);
+    const alias = rng.pick(profile.aliases);
+    const targetAlias = rng.pick(targetProfile.aliases);
+    const environment = trackTag || rng.pick(TRACK_ENVIRONMENTS);
+    const tactical = rng.pick(TACTICAL_FLAVORS);
     const actionList = MASSIVE_ACTIONS[cat] || MASSIVE_ACTIONS.OVERTAKE;
-    const action = pickRandom(actionList, s + 103);
-    const funnyStake = pickRandom(MASSIVE_FUNNY_STAKES, s + 127);
-    const reaction = pickRandom(AUDIENCE_REACTIONS, s + 151);
-    const outro = pickRandom(MASSIVE_OUTROS, s + 181);
+    const action = rng.pick(actionList);
+    const funnyStake = rng.pick(MASSIVE_FUNNY_STAKES);
+    const reaction = rng.pick(AUDIENCE_REACTIONS);
+    const outro = rng.pick(MASSIVE_OUTROS);
 
     if (isStart) {
       switch (templateIdx % 4) {
@@ -316,7 +320,7 @@ export function generateDynamicCommentary(options: {
   const durationSec = Math.max(5.5, Math.min(15.0, Number((wordCount * 0.35).toFixed(2))));
 
   return {
-    id: `dyn_${cat}_${lang}_${s.toString(36)}_${Math.floor(Math.random() * 1000)}`,
+    id: `dyn_${cat}_${lang}_${s.toString(36)}_${rng.int(100, 999)}`,
     category: cat,
     driverName: profile.name,
     text: fullSentence,
@@ -334,20 +338,34 @@ export function generateFullRaceCommentaryTimeline(
   instanceId: number,
   seed: number = 632585,
   durationSeconds: number = 120,
-  lang: 'vi' | 'en' = 'vi'
+  lang: 'vi' | 'en' = 'vi',
+  drivers?: string[],
+  trackName?: string
 ): ScheduledTimelineEvent[] {
   const timeline: ScheduledTimelineEvent[] = [];
   const dur = Math.max(15, durationSeconds);
-  const instSeed = seed ^ (instanceId * 7919);
+  const instSeed = (seed ^ Math.imul(instanceId, 7919)) >>> 0;
+  const rng = createSeededPRNG(instSeed, 31337);
 
-  // Tích hợp cốt truyện độc bản từ kho 3000 kịch bản
-  const storyline = getRaceStoryline(instSeed, lang);
+  // Tích hợp cốt truyện độc bản từ dàn tay đua thực tế của chính chặng đua này
+  const storyline = getRaceStoryline(instSeed, lang, drivers);
   const mainDriver = storyline.protagonist || 'Cristiano Ronaldo';
   const rivalDriver = storyline.antagonist || 'Lionel Messi';
-  
-  // Đảm bảo tối thiểu 3 nhân vật riêng biệt trong mỗi cuộc đua theo yêu cầu của người dùng
-  const candidateThirdDrivers = ['Neymar Jr', 'Kylian Mbappe', 'Erling Haaland', 'David Beckham', 'Kevin De Bruyne', 'Luka Modric', 'Vinicius Jr', 'Lewis Hamilton'];
-  const thirdDriver = (storyline as any).thirdDriver || candidateThirdDrivers.find(d => d !== mainDriver && d !== rivalDriver) || 'Neymar Jr';
+  const thirdDriver = storyline.thirdDriver || 'Neymar Jr.';
+
+  const defaultPool = [
+    'Erling Haaland', 'Kylian Mbappé', 'Max Verstappen', 'Lewis Hamilton',
+    'Charles Leclerc', 'David Beckham', 'Kevin De Bruyne', 'Luka Modrić',
+    'Vinícius Júnior', 'Mohamed Salah', 'Ayrton Senna', 'Valentino Rossi'
+  ];
+  const uniqueRaceDrivers = Array.from(
+    new Set([
+      mainDriver,
+      rivalDriver,
+      thirdDriver,
+      ...(drivers && drivers.length > 0 ? drivers : defaultPool)
+    ].filter(Boolean))
+  );
 
   // 1. Mở màn (START) - Giới thiệu cuộc so tài tam mã và cốt truyện
   const startEvent = generateDynamicCommentary({
@@ -356,8 +374,9 @@ export function generateFullRaceCommentaryTimeline(
     targetDriver: rivalDriver,
     seed: instSeed + 101,
     instanceId,
-    speedKmh: 360 + Math.round(pseudoRandom(instSeed + 102) * 50),
-    lang
+    speedKmh: rng.int(360, 425),
+    lang,
+    trackName
   });
   timeline.push({
     clipId: startEvent.id,
@@ -370,14 +389,14 @@ export function generateFullRaceCommentaryTimeline(
 
   let currentCursorSec = 1.0 + startEvent.durationSec + 2.0;
 
-  // 2. Chèn Câu Cốt Truyện Điểm Nhấn (Storyline Hook từ kho 3000 kịch bản)
+  // 2. Chèn Câu Cốt Truyện Điểm Nhấn (75M+ tổ hợp kịch bản)
   if (currentCursorSec < dur - 18) {
     const hookText = storyline.hook;
     const hookDur = Math.max(5.5, Math.min(12.0, hookText.split(/\s+/).length * 0.35));
     timeline.push({
       clipId: `story_hook_${storyline.id}`,
       type: 'STORY',
-      driver: thirdDriver, // Giới thiệu nhân vật thứ ba hoặc nhân vật hỗ trợ
+      driver: thirdDriver,
       text: hookText,
       startSec: currentCursorSec,
       durationSec: hookDur
@@ -388,13 +407,14 @@ export function generateFullRaceCommentaryTimeline(
   // 3. So kè sớm (BATTLE hoặc SLIPSTREAM) - Giữa Nhân vật 2 và Nhân vật 3
   if (dur >= 24 && currentCursorSec < dur - 18) {
     const battleEvent = generateDynamicCommentary({
-      category: pseudoRandom(instSeed + 203) > 0.5 ? 'BATTLE' : 'SLIPSTREAM',
+      category: rng.chance(0.5) ? 'BATTLE' : 'SLIPSTREAM',
       driverName: rivalDriver,
       targetDriver: thirdDriver,
       seed: instSeed + 203,
       instanceId,
-      speedKmh: 480 + Math.round(pseudoRandom(instSeed + 204) * 80),
-      lang
+      speedKmh: rng.int(480, 565),
+      lang,
+      trackName
     });
     timeline.push({
       clipId: battleEvent.id,
@@ -415,8 +435,9 @@ export function generateFullRaceCommentaryTimeline(
       targetDriver: mainDriver,
       seed: instSeed + 307,
       instanceId,
-      speedKmh: 540 + Math.round(pseudoRandom(instSeed + 308) * 70),
-      lang
+      speedKmh: rng.int(540, 615),
+      lang,
+      trackName
     });
     timeline.push({
       clipId: nitroEvent.id,
@@ -429,26 +450,22 @@ export function generateFullRaceCommentaryTimeline(
     currentCursorSec += nitroEvent.durationSec + 2.0;
   }
 
-  // 5. Cú bẻ cua Drifting đỉnh cao (DRIFT) - Nhân vật 2 phô diễn kỹ năng
+  // 5. Biến cố đường đua bất ngờ từ cốt truyện riêng (STORY TWIST)
   if (dur >= 45 && currentCursorSec < dur - 18) {
-    const driftEvent = generateDynamicCommentary({
-      category: 'DRIFT',
-      driverName: rivalDriver,
-      targetDriver: thirdDriver,
-      seed: instSeed + 413,
-      instanceId,
-      speedKmh: 420 + Math.round(pseudoRandom(instSeed + 414) * 50),
-      lang
-    });
+    const twistDriver = uniqueRaceDrivers[3 % uniqueRaceDrivers.length] || rivalDriver;
+    const twistText = lang === 'en'
+      ? `BREAKING DRAMA! ${storyline.twist} ${twistDriver} reacts with lightning reflexes as ${storyline.secondaryCharacter} watches in shock!`
+      : `BIẾN CỐ BẤT NGỜ! ${storyline.twist} ${twistDriver} đánh lái né ngoạn mục trước sự ngỡ ngàng của ${storyline.secondaryCharacter}!`;
+    const twistDur = Math.max(5.5, Math.min(11.0, twistText.split(/\s+/).length * 0.35));
     timeline.push({
-      clipId: driftEvent.id,
+      clipId: `story_twist_${storyline.id}`,
       type: 'DRIFT',
-      driver: driftEvent.driverName,
-      text: driftEvent.text,
+      driver: twistDriver,
+      text: twistText,
       startSec: currentCursorSec,
-      durationSec: driftEvent.durationSec
+      durationSec: twistDur
     });
-    currentCursorSec += driftEvent.durationSec + 2.0;
+    currentCursorSec += twistDur + 2.0;
   }
 
   // 6. Cú vượt mặt thần sầu (OVERTAKE) - Nhân vật 1 tấn công vượt qua đối thủ
@@ -459,8 +476,9 @@ export function generateFullRaceCommentaryTimeline(
       targetDriver: rivalDriver,
       seed: instSeed + 521,
       instanceId,
-      speedKmh: 590 + Math.round(pseudoRandom(instSeed + 522) * 60),
-      lang
+      speedKmh: rng.int(590, 648),
+      lang,
+      trackName
     });
     timeline.push({
       clipId: overtakeEvent.id,
@@ -473,15 +491,57 @@ export function generateFullRaceCommentaryTimeline(
     currentCursorSec += overtakeEvent.durationSec + 2.0;
   }
 
-  // 7. Cán đích giật cúp vô địch (FINISH)
+  // 6b. Mở rộng bình luận liên tục luân phiên toàn bộ dàn tay đua thực tế trong chặng dài (120s / 600s / 1200s)
+  const midRaceCategories: CommentaryCategory[] = ['BATTLE', 'OVERTAKE', 'NITRO', 'DRIFT', 'SLIPSTREAM', 'LEADER', 'CRASH_SAVE', 'COLLISION'];
+  let midStep = 0;
+  while (currentCursorSec < dur - 22 && midStep < 95) {
+    const stepSeed = (instSeed + 1000 + Math.imul(midStep, 137)) >>> 0;
+    const stepRng = createSeededPRNG(stepSeed, midStep + 1);
+    const cat = stepRng.pick(midRaceCategories);
+    const drvIdx = stepRng.int(0, uniqueRaceDrivers.length - 1);
+    const drv = uniqueRaceDrivers[drvIdx] || mainDriver;
+    const tgtIdx = (drvIdx + stepRng.int(1, Math.max(1, uniqueRaceDrivers.length - 1))) % uniqueRaceDrivers.length;
+    const tgt = uniqueRaceDrivers[tgtIdx] || rivalDriver;
+
+    const midEvent = generateDynamicCommentary({
+      category: cat,
+      driverName: drv,
+      targetDriver: tgt,
+      seed: stepSeed,
+      instanceId,
+      speedKmh: stepRng.int(460, 635),
+      lang,
+      trackName
+    });
+
+    if (currentCursorSec + midEvent.durationSec >= dur - 14) {
+      break;
+    }
+
+    timeline.push({
+      clipId: midEvent.id,
+      type: midEvent.category,
+      driver: midEvent.driverName,
+      text: midEvent.text,
+      startSec: currentCursorSec,
+      durationSec: midEvent.durationSec
+    });
+
+    const gapSec = 6.0 + stepRng.int(0, 5);
+    currentCursorSec += midEvent.durationSec + gapSec;
+    midStep++;
+  }
+
+  // 7. Cán đích giật cúp vô địch (FINISH) kèm hình phạt hài hước của cốt truyện
   const finishEvent = generateDynamicCommentary({
     category: 'FINISH',
     driverName: mainDriver,
     targetDriver: rivalDriver,
     seed: instSeed + 631,
     instanceId,
-    speedKmh: 620 + Math.round(pseudoRandom(instSeed + 632) * 40),
-    lang
+    speedKmh: rng.int(615, 650),
+    lang,
+    trackName
   });
 
   const finishStartSec = Math.max(currentCursorSec, dur - finishEvent.durationSec - 1.2);
@@ -490,7 +550,7 @@ export function generateFullRaceCommentaryTimeline(
       clipId: finishEvent.id,
       type: 'FINISH',
       driver: finishEvent.driverName,
-      text: finishEvent.text,
+      text: `${finishEvent.text} (${storyline.consequence})`,
       startSec: finishStartSec,
       durationSec: finishEvent.durationSec
     });

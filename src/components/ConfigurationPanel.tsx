@@ -67,7 +67,9 @@ export const ConfigurationPanel: React.FC<ConfigurationPanelProps> = ({
     { label: '30s (~60MB)', value: 30 },
     { label: '60s (1 Phút)', value: 60 },
     { label: '70s (1.10s)', value: 70 },
-    { label: '120s (2 Phút)', value: 120 }
+    { label: '120s (2 Phút)', value: 120 },
+    { label: '600s (10 Phút)', value: 600 },
+    { label: '1200s (20 Phút)', value: 1200 }
   ];
 
   const downloadCreateFolderBat = () => {
@@ -150,8 +152,8 @@ pause
         </div>
         <p className="text-[11px] text-slate-400">
           {config.instanceCount === 8
-            ? '⭐ Chuẩn khuyên dùng: 8 luồng video Full HD dọc chạy song song'
-            : `Đang render đồng thời ${config.instanceCount} cuộc đua độc lập`}
+            ? `⭐ Chuẩn khuyên dùng: 8 luồng video Full HD ${config.aspectRatio === '16:9' ? 'ngang (16:9)' : 'dọc (9:16)'} chạy song song`
+            : `Đang render đồng thời ${config.instanceCount} cuộc đua độc lập (${config.aspectRatio})`}
         </p>
       </div>
 
@@ -166,7 +168,13 @@ pause
             <button
               key={res.value}
               id={`btn-resolution-${res.value}`}
-              onClick={() => onChangeConfig({ resolution: res.value })}
+              onClick={() => {
+                const isLandscapeRes = res.value === '1080p (Ngang)' || res.value === '720p' || res.value === '4K';
+                onChangeConfig({
+                  resolution: res.value,
+                  aspectRatio: isLandscapeRes ? '16:9' : '9:16'
+                });
+              }}
               className={`py-1.5 px-2 rounded text-xs font-semibold transition cursor-pointer text-left flex items-center justify-between ${
                 config.resolution === res.value
                   ? 'bg-cyan-600 text-white shadow-sm'
@@ -195,7 +203,20 @@ pause
             <button
               key={aspect.value}
               id={`btn-aspect-${aspect.value.replace(':', '-')}`}
-              onClick={() => onChangeConfig({ aspectRatio: aspect.value })}
+              onClick={() => {
+                const isCurrentLandscape =
+                  config.resolution === '1080p (Ngang)' ||
+                  config.resolution === '720p' ||
+                  config.resolution === '4K';
+                const nextRes: ResolutionPreset =
+                  aspect.value === '16:9'
+                    ? '1080p (Ngang)'
+                    : (isCurrentLandscape ? '1080x1920 (Full HD Dọc)' : config.resolution);
+                onChangeConfig({
+                  aspectRatio: aspect.value,
+                  resolution: nextRes
+                });
+              }}
               className={`py-1.5 rounded text-xs font-bold transition cursor-pointer ${
                 config.aspectRatio === aspect.value
                   ? 'bg-cyan-600 text-white shadow-sm'
@@ -337,13 +358,13 @@ pause
         <label className="block text-xs font-semibold text-slate-300">
           Chu Kỳ Tự Động Cắt Video:
         </label>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
           {durationOptions.map(d => (
             <button
               key={d.value}
               id={`btn-duration-${d.value}`}
               onClick={() => onChangeConfig({ durationSeconds: d.value })}
-              className={`py-1 px-1 rounded text-[11px] font-semibold transition cursor-pointer truncate ${
+              className={`py-1.5 px-1.5 rounded text-[11px] font-semibold transition cursor-pointer truncate ${
                 config.durationSeconds === d.value
                   ? 'bg-emerald-600 text-white shadow-sm'
                   : 'bg-slate-800 hover:bg-slate-700 text-slate-400'
@@ -354,7 +375,7 @@ pause
           ))}
         </div>
         <p className="text-[11px] text-slate-400">
-          Cứ sau {config.durationSeconds} giây, hệ thống tự động đóng file MP4, tạo Seed mới và quay video tiếp theo.
+          Cứ sau {config.durationSeconds} giây ({config.durationSeconds >= 60 ? `${(config.durationSeconds / 60).toFixed(config.durationSeconds % 60 === 0 ? 0 : 1)} phút` : `${config.durationSeconds}s`}), hệ thống tự động đóng file {config.fileFormat.toUpperCase()}, tạo Seed mới và quay video tiếp theo.
         </p>
       </div>
 

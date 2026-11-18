@@ -6,6 +6,7 @@ import { carModelManager } from './carModelManager';
 import { generatePointsForLayout } from './trackLayouts';
 import { getTrackVisualTheme, createRoadTexture, getTrackColorForInstance } from './trackThemes';
 import { SpatialAudioSource, SpatialCameraListener } from './audioSpatialDirector';
+import { groundImageManager } from './groundImageManager';
 
 export type DrivingAssistMode = 'BEGINNER' | 'SPORT' | 'SIMULATION';
 export type PlayerCameraType =
@@ -137,13 +138,15 @@ export class PlayableRacingGame {
 
   // AI Rivals
   public aiRivals: AICarRival[] = [];
+  public speedMultiplier: number = 2.0;
 
   // Controls input state
   public input = {
     throttle: 0,
     brake: 0,
     steer: 0,
-    handbrake: false
+    handbrake: false,
+    boost: false
   };
 
   // Timing & Laps
@@ -253,12 +256,15 @@ export class PlayableRacingGame {
 
     // Ground plane (Mở rộng 35,000m x 35,000m cho đại lộ đua 10x - 8x8 subdivisions tối ưu)
     const groundGeo = new THREE.PlaneGeometry(35000, 35000, 8, 8);
+    const userGroundTex = groundImageManager.getTextureForInstance(1, 42);
     const groundMat = new THREE.MeshStandardMaterial({
-      color: 0x18241b,
-      roughness: 0.95,
+      color: userGroundTex ? 0xffffff : 0x18241b,
+      map: userGroundTex || null,
+      roughness: 0.88,
       metalness: 0.05
     });
     const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.name = 'GROUND_TERRAIN_MESH';
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = -0.1;
     ground.receiveShadow = true;
@@ -520,33 +526,39 @@ export class PlayableRacingGame {
     redCurbsMesh.instanceMatrix.needsUpdate = true;
     this.trackMeshGroup.add(whiteCurbsMesh, redCurbsMesh);
 
-    // Start / Finish Arch Gantry
+    // Vạch xuất phát / về đích phẳng F1 trên mặt đường (Không có cổng chắn ngang đường)
     const startPt = safeGetPointAt(this.trackCurve, 0);
-    const startTg = safeGetTangentAt(this.trackCurve, 0);
+    const startTg = safeGetTangentAt(this.trackCurve, 0).clone().normalize();
     const startNorm = new THREE.Vector3().crossVectors(startTg, new THREE.Vector3(0, 1, 0)).normalize();
 
-    const archGroup = new THREE.Group();
-    const pillarGeo = new THREE.CylinderGeometry(0.4, 0.4, 7, 12);
-    const metalMat = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.8, roughness: 0.3 });
-
-    const pLeft = new THREE.Mesh(pillarGeo, metalMat);
-    pLeft.position.copy(startPt).addScaledVector(startNorm, -roadHalfWidth - 1.2);
-    pLeft.position.y += 3.5;
-    archGroup.add(pLeft);
-
-    const pRight = new THREE.Mesh(pillarGeo, metalMat);
-    pRight.position.copy(startPt).addScaledVector(startNorm, roadHalfWidth + 1.2);
-    pRight.position.y += 3.5;
-    archGroup.add(pRight);
-
-    const beamGeo = new THREE.BoxGeometry(this.trackWidth + 3, 1.2, 1.2);
-    const beam = new THREE.Mesh(beamGeo, new THREE.MeshStandardMaterial({ color: theme.archColor, metalness: 0.5, roughness: 0.4 }));
-    beam.position.copy(startPt);
-    beam.position.y += 7.0;
-    beam.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), startNorm);
-    archGroup.add(beam);
-
-    this.trackMeshGroup.add(archGroup);
+    const finishLineGeo = new THREE.PlaneGeometry(this.trackWidth, 3.5);
+    const finishCanvas = document.createElement('canvas');
+    finishCanvas.width = 512;
+    finishCanvas.height = 128;
+    const fCtx = finishCanvas.getContext('2d')!;
+    for (let r = 0; r < 4; r++) {
+      for (let c = 0; c < 16; c++) {
+        fCtx.fillStyle = (r + c) % 2 === 0 ? '#ffffff' : '#0f172a';
+        fCtx.fillRect(c * 32, r * 32, 32, 32);
+      }
+    }
+    const finishTex = new THREE.CanvasTexture(finishCanvas);
+    const finishMat = new THREE.MeshBasicMaterial({
+      map: finishTex,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -3,
+      polygonOffsetUnits: -3
+    });
+    const finishMesh = new THREE.Mesh(finishLineGeo, finishMat);
+    finishMesh.position.copy(startPt);
+    finishMesh.position.y += 0.14;
+    finishMesh.quaternion.copy(
+      new THREE.Quaternion().setFromRotationMatrix(
+        new THREE.Matrix4().makeBasis(startNorm, startTg, new THREE.Vector3(0, 1, 0))
+      )
+    );
+    this.trackMeshGroup.add(finishMesh);
     this.scene.add(this.trackMeshGroup);
   }
 
@@ -825,6 +837,35 @@ export class PlayableRacingGame {
       this.rainParticles = new THREE.Points(rainGeo, rainMat);
       this.scene.add(this.rainParticles);
     }
+  }
+
+  public setCustomBackgroundImage(
+    url: string | null,
+    mode: '360' | 'BACKDROP' = '360',
+    callback?: (success: boolean) => void
+  ) {
+    if (!url) {
+      this.setupWeather(this.currentWeather);
+      if (callback) callback(true);
+      return;
+    }
+    const loader = new THREE.TextureLoader();
+    loader.load(
+      url,
+      (tex) => {
+        tex.colorSpace = THREE.SRGBColorSpace;
+        if (mode === '360') {
+          tex.mapping = THREE.EquirectangularReflectionMapping;
+        }
+        this.scene.background = tex;
+        if (callback) callback(true);
+      },
+      undefined,
+      (err) => {
+        console.warn('Failed to load custom background image:', err);
+        if (callback) callback(false);
+      }
+    );
   }
 
   public start() {

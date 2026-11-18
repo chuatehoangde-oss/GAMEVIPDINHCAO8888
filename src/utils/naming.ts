@@ -1,5 +1,5 @@
 /**
- * Tiện ích đặt tên video chuẩn theo 5 tay đua nổi tiếng nhất
+ * Tiện ích đặt tên video chuẩn theo 5 tay đua nổi bật nhất của chính cuộc đua đó
  */
 export const FAMOUS_5_DRIVERS = [
   'Lionel Messi',
@@ -35,9 +35,19 @@ export const FULL_STARTING_GRID_DRIVERS: DriverGridEntry[] = [
   { rank: 12, name: 'Thierry Henry', team: 'Zenith F1 #14', color: '#b91c1c', type: 'F1', isPlayer: false },
 ];
 
+function sanitizeSlugToken(raw: string): string {
+  return raw
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .replace(/[^a-zA-Z0-9]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '');
+}
+
 /**
- * Tạo tên file video đua xe chứa tên 5 tay đua nổi tiếng nhất theo đúng yêu cầu:
- * "đặt tên video theo tên 5 tên tay đua nổi tiếng nhất trong danh sách tay đua em nhé"
+ * Tạo tên file video đua xe phản ánh đúng dàn tay đua, chặng đua và mã seed riêng biệt của video
  */
 export function generateFamousDriversVideoFileName(options?: {
   trackName?: string;
@@ -45,25 +55,27 @@ export function generateFamousDriversVideoFileName(options?: {
   date?: Date;
   customDrivers?: string[];
   suffix?: string;
+  seed?: number;
 }): string {
   const d = options?.date || new Date();
   const pad = (n: number) => n.toString().padStart(2, '0');
   const dateStr = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-  
+
   let driversPart = FAMOUS_5_DRIVERS_SLUG;
-  if (options?.customDrivers && options.customDrivers.length >= 5) {
-    driversPart = options.customDrivers
+  if (options?.customDrivers && options.customDrivers.length > 0) {
+    const cleaned = options.customDrivers
       .slice(0, 5)
-      .map(name => name.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, ''))
-      .join('_');
+      .map(name => sanitizeSlugToken(name))
+      .filter(Boolean);
+    if (cleaned.length > 0) {
+      driversPart = cleaned.join('_');
+    }
   }
 
-  const track = (options?.trackName || 'Monza_GP')
-    .replace(/[^a-zA-Z0-9]/g, '_')
-    .replace(/_+/g, '_');
-  
+  const track = sanitizeSlugToken(options?.trackName || 'Monza_GP') || 'Monza_GP';
   const ext = (options?.ext || 'mp4').replace('.', '');
+  const seedPart = options?.seed ? `_S${options.seed}` : '';
   const suffix = options?.suffix ? `_${options.suffix}` : '';
 
-  return `DuaXe_${driversPart}_Chang_${track}${suffix}_${dateStr}.${ext}`;
+  return `DuaXe_${driversPart}_Chang_${track}${seedPart}${suffix}_${dateStr}.${ext}`;
 }

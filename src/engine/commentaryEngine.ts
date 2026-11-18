@@ -152,7 +152,7 @@ class CommentaryEngine {
     category: 'START' | 'OVERTAKE' | 'NITRO' | 'DRIFT' | 'COLLISION' | 'SLIPSTREAM' | 'FINISH' | 'BATTLE',
     customText?: string,
     forced: boolean = false,
-    options?: { driverName?: string; speedKmh?: number; seed?: number; lang?: 'vi' | 'en' }
+    options?: { driverName?: string; targetDriver?: string; speedKmh?: number; seed?: number; lang?: 'vi' | 'en' }
   ) {
     if (!this.isEnabled) return;
 
@@ -175,22 +175,32 @@ class CommentaryEngine {
     else if (category === 'BATTLE' || category === 'SLIPSTREAM') soundType = 'BATTLE';
     else soundType = 'OVERTAKE';
 
-    const clip = commentarySoundManager.getRandomClip(soundType, Math.floor(Math.random() * 100));
-    
+    // Chống lặp tuyệt đối trong phiên đua thực tế (Anti-Repetition History)
+    const excludeSet = new Set(this.recentClipIds);
+    const clip = commentarySoundManager.getRandomClip(soundType, options?.seed || Math.floor(Math.random() * 100000), excludeSet);
+    this.recentClipIds.push(clip.id);
+    if (this.recentClipIds.length > 25) {
+      this.recentClipIds.shift();
+    }
+
+    // Luôn sinh lời bình luận biến thể mới theo đúng tay đua, tốc độ & seed thay vì lặp lại 80 câu tĩnh
     let text = customText;
     if (!text) {
       const dyn = generateDynamicCommentary({
         category,
         driverName: options?.driverName || clip.driver || 'Cristiano Ronaldo',
-        seed: options?.seed || Math.floor(Math.random() * 1000000),
+        targetDriver: options?.targetDriver,
+        seed: (options?.seed || Math.floor(Math.random() * 100000000)) ^ (now & 0xffff),
         speedKmh: options?.speedKmh,
         lang: currentLang
       });
-      text = dyn.text;
+      text = dyn.text || clip.text;
     }
 
     this.playClip(clip, category, text, currentLang);
   }
+
+  private recentClipIds: string[] = [];
 
   /**
    * Phát giọng bình luận chuẩn truyền hình trực tiếp vào Web Audio API của game

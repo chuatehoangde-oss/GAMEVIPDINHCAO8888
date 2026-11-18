@@ -3,6 +3,8 @@ import { CameraDirector } from './cameraDirector';
 import { TrackGenerator, GeneratedTrack, createSkyAtmosphereTexture } from './trackGenerator';
 import { VehiclePhysicsSystem, Car3DObject } from './vehiclePhysics';
 import { BIOMES, ROAD_LAYOUT_PRESETS } from './scenarioGenerator';
+import { createSeededPRNG, generateHighEntropySeed } from '../utils/prng';
+import { safeGetPointAt, safeGetTangentAt } from './curveUtils';
 import {
   CameraMode,
   AICarState,
@@ -10,26 +12,56 @@ import {
   InstanceRuntime,
   RoadLayoutType,
   TrackBiome,
-  WeatherType
+  WeatherType,
+  LampPoleType,
+  ArchStyleType
 } from '../types';
+
+const SESSION_STYLE_SALT = (Date.now() ^ Math.floor(Math.random() * 0x7fffffff)) >>> 0;
+
+const ALL_20_POLE_TYPES: LampPoleType[] = [
+  'curved_arch', 'double_cantilever', 'stadium_floodlight', 'minimalist_l', 'industrial_truss',
+  'cyber_disc', 'cobra_head', 'twin_y_fork', 'spiral_helix', 'pagoda_tier',
+  'gantry_bracket', 'windmill_blade', 'triple_lantern', 'neon_totem_pillar', 'chevron_arc',
+  'solar_wing', 'prism_obelisk', 'suspended_halo_rig', 'railgun_mast', 'crown_beacon'
+];
+
+const ALL_30_ARCH_TYPES: ArchStyleType[] = [
+  'classic_gantry', 'gothic_pointed_arch', 'semi_circular_vault', 'double_deck_truss', 'v_wing_butterfly',
+  'hexagonal_portal', 'trapezoid_cyber_gate', 'suspension_cable_bridge', 'twin_spire_cathedral', 'chevron_inverted_v',
+  'circular_turbine_ring', 'cantilever_split_wings', 'truss_spaceframe_box', 'pagoda_eave_gate', 'stealth_monolith_frame',
+  'triple_rib_fin', 'diamond_crown_portal', 'curved_ribbon_wave', 'f1_pit_bridge', 'lightning_zigzag_arch',
+  'halo_sunburst_gate', 'twin_barrel_arcade', 'a_frame_pylon_span', 'floating_ring_gantry', 'stepped_art_deco',
+  'boomerang_arc', 'prism_crystal_vault', 'heavy_industrial_crane', 'tunnel_blade_louvers', 'championship_trophy_arch'
+];
+
+const ALL_WEATHER_TYPES: WeatherType[] = [
+  'Sunny', 'Sunset', 'HeavyRain', 'NeonNight', 'DenseFog',
+  'Thunderstorm', 'SnowBlizzard', 'Sandstorm', 'MidnightFullMoon', 'AuroraBorealis',
+  'VolcanicAsh', 'BloodMoon', 'ToxicHaze', 'HeatwaveMirage', 'SunriseDawn',
+  'AutumnDrizzle', 'TropicalMonsoon', 'SolarEclipse', 'StarlightGalaxy', 'VaporwaveDusk',
+  'CrystalRain', 'OvercastGloom', 'DustDevil', 'PolarTwilight', 'OceanBreeze'
+];
 
 const CAR_NAMES = [
   'Apex Predator', 'Phantom GT', 'Viper X', 'Nebula Turbo', 'Cyber Falcon',
   'Solar Flare', 'Thunderbolt', 'Spectre RS', 'Titan R', 'Crimson Hawk',
-  'Vortex 9', 'Velocity Zero', 'Zenith F1', 'Onyx Hyper', 'Quantum Drifter'
+  'Vortex 9', 'Velocity Zero', 'Zenith F1', 'Onyx Hyper', 'Quantum Drifter',
+  'Valkyrie AMR', 'Hyperion V12', 'Mirage Evo', 'Tempest RSX', 'Monolith GT',
+  'Helios GT3', 'Apex Spectre', 'Aurora V10', 'Dominator Z', 'Zephyr Proto'
 ];
 
 const MASTER_DECORATOR_ITEMS = [
   // 1. Roadside safety/signage
   'Cột đèn đường cao', 'Đèn chiếu sáng sân đua', 'Đèn LED dọc đường', 'Biển báo giới hạn tốc độ', 
   'Biển báo hướng cua', 'Biển báo nguy hiểm', 'Biển báo đường trơn', 'Biển báo giảm tốc', 
-  'Biển báo khu vực xuất phát', 'Biển báo khu vực về đích', 'Cột mốc khoảng cách', 'Cọc tiêu giao thông', 
+  'Biển báo vào cua tốc độ cao', 'Biển báo khu vực DRS', 'Cột mốc khoảng cách', 'Cọc tiêu giao thông', 
   'Rào chắn nhựa', 'Hàng rào thép', 'Hàng rào lưới B40', 'Tường chắn bê tông', 'Barrier bảo vệ đường đua', 
   'Gờ giảm tốc', 'Gương cầu giao thông', 'Cột phản quang',
-  // 2. Start/Finish & Race banners
-  'Cổng xuất phát', 'Cổng về đích', 'Bảng điện tử thời gian', 'Đồng hồ đếm ngược', 'Đèn tín hiệu xuất phát', 
+  // 2. Race banners & circuit signage
+  'Trạm quan sát trọng tài', 'Cổng đo tốc độ Radar', 'Bảng điện tử thời gian', 'Đồng hồ đếm ngược', 'Đèn tín hiệu đường đua', 
   'Bảng số vòng đua', 'Bảng tên đường đua', 'Bảng quảng cáo nhà tài trợ', 'Banner treo trên hàng rào', 
-  'Cờ caro', 'Cờ đua nhiều màu', 'Cờ quốc gia', 'Cờ cảnh báo vàng', 'Cờ đỏ', 'Cột cờ', 'Phao đánh dấu góc cua', 
+  'Cờ hiệu đường đua', 'Cờ đua nhiều màu', 'Cờ quốc gia', 'Cờ cảnh báo vàng', 'Cờ đỏ', 'Cột cờ', 'Phao đánh dấu góc cua', 
   'Biển số Turn 1', 'Biển số Turn 2', 'Biển số Turn 3', 'Bảng khoảng cách đến cua',
   // 3. Pit-lane & Team gear
   'Nhà pit', 'Gara đội đua', 'Trạm sửa xe', 'Bàn dụng cụ', 'Thùng dụng cụ', 'Kệ lốp xe', 'Lốp xe xếp chồng', 
@@ -48,34 +80,20 @@ const MASTER_DECORATOR_ITEMS = [
 ];
 
 export function getDecoratorsForSeed(seed: number): string[] {
-  let sVal = Math.abs(seed) || 42;
-  const pRand = () => {
-    sVal = (sVal * 16807) % 2147483647;
-    return (sVal - 1) / 2147483646;
-  };
-  const arr = [...MASTER_DECORATOR_ITEMS];
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(pRand() * (i + 1));
-    const temp = arr[i];
-    arr[i] = arr[j];
-    arr[j] = temp;
-  }
-  return arr.slice(0, 15);
+  const rng = createSeededPRNG(seed, 3313);
+  const arr = rng.shuffle(MASTER_DECORATOR_ITEMS);
+  return arr.slice(0, rng.int(15, 22));
 }
 
 /**
- * Hàm biến đổi cấu hình môi trường dựa trên seed để tạo ra 100 bản đồ độc nhất vô nhị
- * về màu nền (sky/ground), màu vạch đường, độ dày mỏng của vạch và màu đèn chiếu sáng.
+ * Hàm biến đổi cấu hình môi trường dựa trên seed để tạo ra hàng chục triệu bản đồ độc nhất vô nhị
+ * về màu nền (sky/ground), màu vạch đường, độ dày mỏng của vạch, gờ giảm tốc, cọc tiêu và đèn chiếu sáng.
  */
-function customizeBiomeBySeed(baseBiome: TrackBiome, seed: number, instanceId: number = 1): TrackBiome {
+function customizeBiomeBySeed(baseBiome: TrackBiome, seed: number, instanceId: number = 1, chunkIndex: number = 1): TrackBiome {
   const biome = { ...baseBiome };
-  let sValue = Math.abs(seed * 17 + instanceId * 1013) || 42;
-  const pseudoRand = () => {
-    sValue = (sValue * 16807) % 2147483647;
-    return (sValue - 1) / 2147483646;
-  };
+  const rng = createSeededPRNG(seed, instanceId * 4099);
 
-  // Tuyển tập 12 bảng phối màu nền & bầu trời ban ngày rực rỡ, tươi sáng và đa dạng
+  // Tuyển tập 12 bảng phối màu nền & bầu trời rực rỡ, tươi sáng và đa dạng
   const BRIGHT_SKY_PALETTES = [
     { sky: 0x38bdf8, ground: 0x22c55e, fog: 0xe0f2fe, ambient: 0xbbf7d0, light: 2.3 }, // Trời xanh đồng cỏ xanh mướt
     { sky: 0x60a5fa, ground: 0x64748b, fog: 0xeff6ff, ambient: 0xdbeafe, light: 2.4 }, // Đô thị hiện đại trời trong nắng
@@ -91,89 +109,107 @@ function customizeBiomeBySeed(baseBiome: TrackBiome, seed: number, instanceId: n
     { sky: 0x818cf8, ground: 0x34d399, fog: 0xf5f3ff, ambient: 0xe0e7ff, light: 2.4 }, // Trời xanh tím Solarpunk rực rỡ
   ];
 
-  const paletteIndex = Math.abs(seed + instanceId * 7) % BRIGHT_SKY_PALETTES.length;
-  const chosenPalette = BRIGHT_SKY_PALETTES[paletteIndex];
+  const chosenPalette = rng.pick(BRIGHT_SKY_PALETTES);
 
-  const hsvToHex = (h: number, s: number, v: number) => {
-    const c = new THREE.Color().setHSL(h / 360, s, v);
+  const shiftHexHSL = (hex: number, hueDelta: number, satDelta: number, lightDelta: number) => {
+    const c = new THREE.Color(hex);
+    const hsl = { h: 0, s: 0, l: 0 };
+    c.getHSL(hsl);
+    c.setHSL(
+      ((hsl.h + hueDelta) % 1 + 1) % 1,
+      Math.max(0.1, Math.min(0.95, hsl.s + satDelta)),
+      Math.max(0.12, Math.min(0.9, hsl.l + lightDelta))
+    );
     return c.getHex();
   };
 
-  // Màu sắc nền bầu trời và mặt đất luôn sáng rõ, tươi tắn
-  const usePreset = pseudoRand() > 0.4;
-  if (usePreset && baseBiome.skyColor) {
-    biome.skyColor = baseBiome.skyColor;
-    biome.groundColor = baseBiome.groundColor;
-    biome.fogColor = baseBiome.fogColor;
-    biome.ambientColor = baseBiome.ambientColor;
-    biome.lightIntensity = baseBiome.lightIntensity || 2.4;
+  const hsvToHex = (h: number, s: number, v: number) => {
+    const c = new THREE.Color().setHSL(((h / 360) % 1 + 1) % 1, s, v);
+    return c.getHex();
+  };
+
+  // Màu sắc nền bầu trời và mặt đất luôn biến thiên liên tục theo seed
+  const usePreset = rng.next() > 0.5 && Boolean(baseBiome.skyColor);
+  const skyBase = usePreset ? baseBiome.skyColor : chosenPalette.sky;
+  const groundBase = usePreset ? baseBiome.groundColor : chosenPalette.ground;
+  const fogBase = usePreset ? baseBiome.fogColor : chosenPalette.fog;
+  const ambientBase = usePreset ? baseBiome.ambientColor : chosenPalette.ambient;
+
+  biome.skyColor = shiftHexHSL(skyBase, rng.float(-0.07, 0.07), rng.float(-0.08, 0.08), rng.float(-0.06, 0.06));
+  biome.groundColor = shiftHexHSL(groundBase, rng.float(-0.09, 0.09), rng.float(-0.1, 0.1), rng.float(-0.08, 0.08));
+  biome.fogColor = shiftHexHSL(fogBase, rng.float(-0.05, 0.05), rng.float(-0.06, 0.06), rng.float(-0.04, 0.04));
+  biome.ambientColor = ambientBase;
+  biome.lightIntensity = (usePreset ? (baseBiome.lightIntensity || 2.4) : chosenPalette.light) + rng.float(-0.15, 0.25);
+
+  biome.fogDensity = 0.00007 + rng.next() * 0.00007;
+
+  // 1. Loại kết cấu bề mặt đường đua theo seed (7 loại kết cấu đa dạng)
+  const ROAD_TEXTURES = ['asphalt_dark', 'tarmac_grey', 'wet_reflection', 'red_f1', 'desert_clay', 'cyber_midnight', 'alpine_ice'] as const;
+  biome.roadTextureType = rng.pick([...ROAD_TEXTURES]);
+
+  // Màu mặt đường đua: Đậm nét tương phản theo seed
+  const trackHue = rng.next() * 360;
+  biome.trackColor = rng.next() > 0.5 ? 0x1e293b : hsvToHex(trackHue, 0.45, 0.38);
+
+  // 2. 20 Loại Cột Đèn & 30 Loại Vòm Hầm ngẫu nhiên độc bản, đảm bảo KHÔNG trùng lặp giữa các luồng đua song song
+  const batchPoleRng = createSeededPRNG(SESSION_STYLE_SALT, chunkIndex * 7919 + 17);
+  const shuffledPoles = batchPoleRng.shuffle(ALL_20_POLE_TYPES);
+  biome.lampPoleType = shuffledPoles[(Math.max(1, instanceId) - 1) % shuffledPoles.length];
+
+  const batchArchRng = createSeededPRNG(SESSION_STYLE_SALT, chunkIndex * 104729 + 31);
+  const shuffledArches = batchArchRng.shuffle(ALL_30_ARCH_TYPES);
+  biome.archType = shuffledArches[(Math.max(1, instanceId) - 1) % shuffledArches.length];
+
+  // 3. Màu sắc cột đèn đường biến thiên theo seed
+  const POLE_COLORS = [0x94a3b8, 0x1e293b, 0x0f172a, 0xd97706, 0xe2e8f0, 0x475569, 0x334155, 0x78350f];
+  biome.poleColor = shiftHexHSL(rng.pick(POLE_COLORS), rng.float(-0.05, 0.05), rng.float(-0.1, 0.1), rng.float(-0.06, 0.06));
+
+  // 4. Màu ánh sáng đèn đường theo seed
+  const LAMP_COLORS = [0xfbbf24, 0xffffff, 0x38bdf8, 0x22d3ee, 0xf43f5e, 0xa855f7, 0x4ade80];
+  biome.lampColor = shiftHexHSL(rng.pick(LAMP_COLORS), rng.float(-0.06, 0.06), 0.05, 0);
+
+  // 5. Kiểu vạch tim đường ở giữa theo seed
+  const LINE_PATTERNS = ['single', 'double', 'triple', 'arrows', 'pulse', 'dashed_yellow', 'strobe', 'neon_glow'] as const;
+  biome.centerLinePattern = rng.pick([...LINE_PATTERNS]);
+
+  // 6. Màu sắc và kích thước vạch kẻ giữa đường theo seed
+  const LINE_COLORS = [0xffffff, 0xfacc15, 0x22d3ee, 0x4ade80, 0xfb923c, 0xf43f5e, 0xc084fc];
+  biome.centerLineColor = rng.pick(LINE_COLORS);
+  biome.centerLineWidth = 0.30 + rng.next() * 0.28;
+  biome.centerLineLength = 4.0 + rng.next() * 5.8;
+
+  // 7. Vạch kẻ biên 2 bên đường theo seed
+  const EDGE_COLORS = [0xffffff, 0xfacc15, 0x22d3ee, 0xf97316, 0x4ade80];
+  biome.edgeLineColor = rng.pick(EDGE_COLORS);
+
+  // 8. Cặp phối màu gờ giảm tốc (Curbs) độc bản theo seed
+  const KERB_COMBOS = [
+    { c1: 0xffffff, c2: 0xdc2626 },
+    { c1: 0xfacc15, c2: 0x0f172a },
+    { c1: 0xffffff, c2: 0x2563eb },
+    { c1: 0xf97316, c2: 0x1e293b },
+    { c1: 0x06b6d4, c2: 0xec4899 },
+    { c1: 0xffffff, c2: 0x16a34a },
+    { c1: 0xa855f7, c2: 0xfacc15 },
+    { c1: 0xd97706, c2: 0x020617 }
+  ];
+  if (rng.next() < 0.35) {
+    const h1 = rng.float(0, 360);
+    biome.kerbColor1 = hsvToHex(h1, rng.float(0.7, 0.95), rng.float(0.48, 0.65));
+    biome.kerbColor2 = rng.next() < 0.5 ? 0xf8fafc : hsvToHex((h1 + 180) % 360, rng.float(0.6, 0.9), rng.float(0.18, 0.42));
   } else {
-    biome.skyColor = chosenPalette.sky;
-    biome.groundColor = chosenPalette.ground;
-    biome.fogColor = chosenPalette.fog;
-    biome.ambientColor = chosenPalette.ambient;
-    biome.lightIntensity = chosenPalette.light;
+    const chosenKerb = rng.pick(KERB_COMBOS);
+    biome.kerbColor1 = chosenKerb.c1;
+    biome.kerbColor2 = chosenKerb.c2;
   }
 
-  biome.fogDensity = 0.00008 + pseudoRand() * 0.00006;
+  // 9. Màu cọc tiêu, mũ phản quang và khung cổng vòm theo seed
+  const REFLECTOR_COLORS = [0xf59e0b, 0xef4444, 0x22c55e, 0x06b6d4, 0xa855f7, 0xf43f5e, 0x38bdf8];
+  biome.bollardReflectorColor = rng.pick(REFLECTOR_COLORS);
+  biome.bollardBodyColor = hsvToHex(rng.float(0, 360), rng.float(0.55, 0.9), rng.float(0.15, 0.48));
+  biome.archColor = hsvToHex(rng.float(0, 360), rng.float(0.35, 0.85), rng.float(0.16, 0.42));
 
-  // 1. Loại kết cấu bề mặt đường đua (7 loại kết cấu đa dạng)
-  // Asphalt sần, Tarmac xám, Đường ướt phản chiếu vệt nước (wet_reflection), Đỏ rực F1 Grand Prix (red_f1), Đất đỏ sa mạc (desert_clay), Midnight Cyber (cyber_midnight), và Băng tuyết Alpine (alpine_ice)
-  const ROAD_TEXTURES = ['asphalt_dark', 'tarmac_grey', 'wet_reflection', 'red_f1', 'desert_clay', 'cyber_midnight', 'alpine_ice'] as const;
-  biome.roadTextureType = ROAD_TEXTURES[(instanceId - 1) % ROAD_TEXTURES.length];
-  
-  // Màu mặt đường đua: Đậm nét tương phản
-  const trackHue = (pseudoRand() * 360);
-  biome.trackColor = pseudoRand() > 0.6 ? 0x1e293b : hsvToHex(trackHue, 0.45, 0.38);
-
-  // 2. Kiểu dáng cột đèn chiếu sáng (6 phong cách kiến trúc khác biệt cho mỗi luồng)
-  // Cột vòm uốn cong (curved_arch), Dầm đôi vươn xa (double_cantilever), Giàn đèn sân vận động (stadium_floodlight), Tối giản chữ L (minimalist_l), Giàn thép không gian công nghiệp (industrial_truss), và Đĩa phát quang tương lai (cyber_disc)
-  const POLE_TYPES = ['curved_arch', 'double_cantilever', 'stadium_floodlight', 'minimalist_l', 'industrial_truss', 'cyber_disc'] as const;
-  biome.lampPoleType = POLE_TYPES[(instanceId - 1) % POLE_TYPES.length];
-
-  // 3. Màu sắc cột đèn đường (kim loại sang trọng, không trùng lặp)
-  const POLE_COLORS = [0x94a3b8, 0x1e293b, 0x0f172a, 0xd97706, 0xe2e8f0, 0x475569, 0x334155, 0x78350f];
-  biome.poleColor = POLE_COLORS[(instanceId - 1) % POLE_COLORS.length];
-
-  // 4. Màu ánh sáng đèn đường: Đèn Halogen ấm (0xfbbf24), Trắng tuyết (0xffffff), Xanh băng (0x38bdf8), Neon Cyan (0x22d3ee), Magenta (0xf43f5e)
-  const LAMP_COLORS = [0xfbbf24, 0xffffff, 0x38bdf8, 0x22d3ee, 0xf43f5e];
-  biome.lampColor = LAMP_COLORS[(instanceId - 1) % LAMP_COLORS.length];
-
-  // 5. 6 Kiểu vạch tim đường ở giữa (Đơn, Đôi, Ba vạch, Vạch mũi tên xé gió, Vạch nhịp xung ánh sáng, Vạch vàng đứt đoạn)
-  const LINE_PATTERNS = ['single', 'double', 'triple', 'arrows', 'pulse', 'dashed_yellow'] as const;
-  biome.centerLinePattern = LINE_PATTERNS[(instanceId - 1) % LINE_PATTERNS.length];
-
-  // 6. Màu sắc vạch kẻ giữa đường
-  const LINE_COLORS = [0xffffff, 0xfacc15, 0x22d3ee, 0x4ade80, 0xfb923c, 0xf43f5e];
-  biome.centerLineColor = LINE_COLORS[(instanceId - 1) % LINE_COLORS.length];
-  biome.centerLineWidth = 0.32 + pseudoRand() * 0.24;
-  biome.centerLineLength = 4.2 + pseudoRand() * 5.5;
-
-  // 7. Vạch kẻ biên 2 bên đường (Trắng, Vàng cảnh báo, Neon Cyan, Cam rực rỡ)
-  const EDGE_COLORS = [0xffffff, 0xfacc15, 0x22d3ee, 0xf97316];
-  biome.edgeLineColor = EDGE_COLORS[(instanceId - 1) % EDGE_COLORS.length];
-
-  // 8. 8 Cặp phối màu gờ giảm tốc (Curbs) độc bản theo từng chặng đua
-  const KERB_COMBOS = [
-    { c1: 0xffffff, c2: 0xdc2626 }, // 1. Grand Prix Đỏ / Trắng
-    { c1: 0xfacc15, c2: 0x0f172a }, // 2. Hazard Vàng / Đen
-    { c1: 0xffffff, c2: 0x2563eb }, // 3. Monaco Xanh / Trắng
-    { c1: 0xf97316, c2: 0x1e293b }, // 4. McLaren Cam / Đen
-    { c1: 0x06b6d4, c2: 0xec4899 }, // 5. Cyber Neon Cyan / Magenta
-    { c1: 0xffffff, c2: 0x16a34a }, // 6. Monza Xanh lá / Trắng
-    { c1: 0xa855f7, c2: 0xfacc15 }, // 7. Tím Hoàng Gia / Vàng Neon
-    { c1: 0xd97706, c2: 0x020617 }  // 8. Vàng Gold / Đen Stealth
-  ];
-  const chosenKerb = KERB_COMBOS[(instanceId - 1) % KERB_COMBOS.length];
-  biome.kerbColor1 = chosenKerb.c1;
-  biome.kerbColor2 = chosenKerb.c2;
-
-  // 9. Màu cọc tiêu và mũ phản quang
-  const REFLECTOR_COLORS = [0xf59e0b, 0xef4444, 0x22c55e, 0x06b6d4, 0xa855f7, 0xf43f5e];
-  biome.bollardReflectorColor = REFLECTOR_COLORS[(instanceId - 1) % REFLECTOR_COLORS.length];
-  biome.bollardBodyColor = [0x1e293b, 0xfacc15, 0xf8fafc, 0x0f172a][(instanceId - 1) % 4];
-
-  biome.name = `${baseBiome.name} (Chặng #${(seed % 100) + 1})`;
+  biome.name = `${baseBiome.name} (Chặng #${(Math.abs(seed) % 99999) + 1})`;
   biome.highlightDecorations = getDecoratorsForSeed(seed);
   return biome;
 }
@@ -252,14 +288,19 @@ export class RacingInstance {
 
   public recover() {
     this.status = 'recovering';
-    this.initRace(Math.floor(Math.random() * 1000000));
+    this.initRace(generateHighEntropySeed(this.id, this.videoChunkIndex + 1));
     this.status = 'rendering';
+  }
+
+  public updateGroundTexture() {
+    // Tự động làm mới kết cấu mặt đất khi nhận cập nhật hình ảnh nền
   }
 
   private trackMeshGroup: THREE.Group = new THREE.Group();
   private carsGroup: THREE.Group = new THREE.Group();
   private dirLight!: THREE.DirectionalLight;
   private hemiLight!: THREE.HemisphereLight;
+  private hasPlacedFinalFinishLine: boolean = false;
 
   constructor(
     id: number,
@@ -269,16 +310,14 @@ export class RacingInstance {
   ) {
     this.id = id;
     this.totalChunkDuration = durationSeconds;
-    const actualSeed = seed !== undefined ? seed : Math.floor(Math.random() * 900000 + 100000);
+    const actualSeed = seed !== undefined ? seed : generateHighEntropySeed(this.id, this.videoChunkIndex);
 
     // Hỗ trợ chuẩn xác 6 / 15 / 30 tay đua, hoặc 🎲 Random ngẫu nhiên 6 đến 35 xe độc bản
     if (carCount && carCount > 0) {
       this.desiredCarCount = Math.max(4, Math.min(35, carCount));
     } else {
-      // 0 = 🎲 Random ngẫu nhiên phân bổ từ 6 đến 35 xe độc bản cho từng luồng
-      const minCars = 6;
-      const maxCars = 35;
-      this.desiredCarCount = minCars + ((this.id * 3 + Math.abs(actualSeed)) % (maxCars - minCars + 1));
+      // 0 = 🎲 Random ngẫu nhiên phân bổ từ 6 đến 35 xe độc bản cho từng luồng theo seed
+      this.desiredCarCount = createSeededPRNG(actualSeed, this.id * 271).int(6, 35);
     }
 
     this.scene = new THREE.Scene();
@@ -306,16 +345,19 @@ export class RacingInstance {
   }
 
   private initRace(customSeed?: number) {
-    const seed = customSeed !== undefined ? customSeed : Math.floor(Math.random() * 900000 + 100000);
-    const biomeIndex = (this.id - 1 + seed) % BIOMES.length;
+    const seed = customSeed !== undefined ? customSeed : generateHighEntropySeed(this.id, this.videoChunkIndex);
+    const rng = createSeededPRNG(seed, this.id * 997);
 
-    // Phân bổ 36 kiểu đường đua hoàn toàn khác biệt cho từng luồng (khi chạy 6 hoặc 8 luồng, mỗi luồng được cấp một kiểu đường đua và độ cong độc lập)
-    const layoutIndex = ((this.id - 1) * 5 + (seed % 7)) % ROAD_LAYOUT_PRESETS.length;
+    // Phân bổ hoàn toàn độc bản cho từng cuộc đua trong hàng chục triệu biến thể
+    const biomeIndex = rng.int(0, BIOMES.length - 1);
+    const layoutIndex = rng.int(0, ROAD_LAYOUT_PRESETS.length - 1);
+    const weather = rng.pick(ALL_WEATHER_TYPES);
+
     const rawBiome = { ...BIOMES[biomeIndex], roadLayoutType: ROAD_LAYOUT_PRESETS[layoutIndex].id };
-    const biome = customizeBiomeBySeed(rawBiome, seed, this.id);
+    const biome = customizeBiomeBySeed(rawBiome, seed, this.id, this.videoChunkIndex);
 
-    // Apply Biome Atmosphere - Bầu trời chuyển sắc quang quyển chiều sâu, loại bỏ hoàn toàn mảng màu phẳng lì nhòe nhạt
-    this.scene.background = createSkyAtmosphereTexture(biome.skyColor, biome.fogColor);
+    // Apply Biome Atmosphere - Bầu trời chuyển sắc quang quyển chiều sâu độc bản theo seed
+    this.scene.background = createSkyAtmosphereTexture(biome.skyColor, biome.fogColor, seed);
     this.scene.fog = new THREE.Fog(biome.fogColor, 6000, 32000);
     this.dirLight.intensity = Math.max(2.4, biome.lightIntensity || 2.6);
     this.hemiLight.color.setHex(biome.ambientColor);
@@ -327,36 +369,39 @@ export class RacingInstance {
     // Build Cars
     this.rebuildCars(seed, biome);
 
-    // Phân bổ đạo diễn điện ảnh ngẫu nhiên riêng cho từng luồng: mỗi luồng bắt đầu bằng một góc máy khác nhau với nhịp chuyển cảnh riêng biệt
+    // Đạo diễn điện ảnh mở màn & nhịp chuyển cảnh biến thiên theo từng cuộc đua
+    this.chunkTimeElapsed = 0;
+    this.hasPlacedFinalFinishLine = false;
+    this.cameraDirector.resetFirstFrame();
+
     const INITIAL_CAMERA_MODES: CameraMode[] = [
-      CameraMode.PANORAMIC,                // 1. Toàn cảnh trường đua từ trên cao
-      CameraMode.CHOPPER_HELI_CHASE,       // 2. Trực thăng Helichase
-      CameraMode.TRACKSIDE_TELEPHOTO,      // 3. Telephoto ven đường
-      CameraMode.COCKPIT_FIRST_PERSON,     // 4. Cockpit buồng lái
-      CameraMode.SKY_DRONE_BROADCAST,      // 5. Flycam bám đuổi
-      CameraMode.MULTI_CAR_PACK_CHASE,     // 6. Bám đuôi đoàn xe trên cao
-      CameraMode.MULTI_CAR_OVERTAKE_WIDE,  // 7. Toàn cảnh vượt mặt
-      CameraMode.BUMPER_FIRST_PERSON       // 8. Cản trước xé gió
+      CameraMode.PANORAMIC,
+      CameraMode.HIGH_SPORTS_PANORAMA,
+      CameraMode.CHOPPER_HELI_CHASE,
+      CameraMode.COCKPIT_FIRST_PERSON,
+      CameraMode.SKY_DRONE_BROADCAST,
+      CameraMode.MULTI_CAR_PACK_CHASE,
+      CameraMode.MULTI_CAR_OVERTAKE_WIDE,
+      CameraMode.MULTI_CAR_FRONT_FACING,
+      CameraMode.BUMPER_FIRST_PERSON
     ];
-    const initialMode = INITIAL_CAMERA_MODES[(this.id - 1) % INITIAL_CAMERA_MODES.length];
+    const initialMode = rng.pick(INITIAL_CAMERA_MODES);
     this.cameraDirector.setCameraMode(initialMode, false);
-    // Nhịp chuyển cảnh riêng biệt theo luồng
-    this.cameraDirector.nextSwitchTime = 5.2 + ((this.id * 1.3) % 2.4);
+    if (initialMode !== CameraMode.CHOPPER_HELI_CHASE) {
+      this.cameraDirector.nextSwitchTime = rng.float(4.2, 7.6);
+    }
 
     this.seedData = {
       seed,
       instanceId: this.id,
       biome,
-      weather: 'Sunny',
+      weather,
       roadLayout: biome.roadLayoutType || 'GP_OVAL_FAST',
       carCount: this.cars.length,
       cars: this.cars.map(c => c.state),
-      aiAggressionBase: 0.85,
+      aiAggressionBase: rng.float(0.76, 0.96),
       createdAt: new Date().toISOString()
     };
-
-    this.chunkTimeElapsed = 0;
-    this.cameraDirector.resetFirstFrame();
   }
 
   private rebuildTrack(seed: number, biome: TrackBiome) {
@@ -377,21 +422,37 @@ export class RacingInstance {
     }
     this.cars = [];
 
+    const rng = createSeededPRNG(seed, this.id * 7919 + 55);
     const numCars = this.desiredCarCount;
-    // Bố trí cự ly xuất phát theo tiêu chuẩn hàng đôi Grand Prix cự ly nghẹt thở (4.5m - 5.8m mỗi hàng)
-    // Toàn bộ các xe nằm sát cạnh nhau trong phạm vi 35-45m, ngay từ giây đầu tiên đã rượt đuổi và đảo làn kịch tính
     const trackLen = (this.track && this.track.totalLength > 100) ? this.track.totalLength : 35000;
     const startProgress = 0.08;
 
-    for (let i = 0; i < numCars; i++) {
-      const colorInfo = CAR_COLORS[(this.id * 5 + i * 3) % CAR_COLORS.length];
-      const carName = CAR_NAMES[(this.id * 3 + i * 2) % CAR_NAMES.length];
-      // Đồng bộ chuẩn 100% với màn hình Game & Tên video xuất xưởng (Lionel Messi, Cristiano Ronaldo...)
-      const driverIdx = i % DRIVER_NAMES.length;
-      const driver = DRIVER_NAMES[driverIdx];
-      const meshIdx = i % 5;
+    // Trộn danh sách tay đua, màu sơn, mẫu xe, số áo -> Không có 2 cuộc đua nào giống nhau về cầu thủ/xe!
+    const shuffledDrivers = rng.shuffle(DRIVER_NAMES);
+    const shuffledColors = rng.shuffle(CAR_COLORS);
+    const shuffledCarNames = rng.shuffle(CAR_NAMES);
+    const shuffledNumbers = rng.shuffle(Array.from({ length: 99 }, (_, k) => k + 1));
+    const VEHICLE_TYPES: AICarState['type'][] = ['hypercar', 'formula', 'muscle', 'gt_racer', 'cyber_coupe'];
 
-      // Xuất phát hàng đôi so le: Xe chẵn bên trái, xe lẻ bên phải, khoảng cách chỉ 5.5 mét mỗi hàng
+    for (let i = 0; i < numCars; i++) {
+      const baseColor = shuffledColors[i % shuffledColors.length];
+      // Biến thiên nhẹ sắc độ sơn xe theo seed để màu sơn luôn tươi mới độc bản
+      const carCol = new THREE.Color(baseColor.hex);
+      const hsl = { h: 0, s: 0, l: 0 };
+      carCol.getHSL(hsl);
+      carCol.setHSL(
+        ((hsl.h + rng.float(-0.04, 0.04)) % 1 + 1) % 1,
+        Math.max(0.1, Math.min(1.0, hsl.s + rng.float(-0.05, 0.08))),
+        Math.max(0.12, Math.min(0.92, hsl.l + rng.float(-0.05, 0.05)))
+      );
+
+      const carName = shuffledCarNames[i % shuffledCarNames.length];
+      const carNum = shuffledNumbers[i % shuffledNumbers.length];
+      const driver = shuffledDrivers[i % shuffledDrivers.length];
+      const vehicleType = rng.pick(VEHICLE_TYPES);
+      const meshIdx = rng.int(0, 7);
+
+      // Xuất phát hàng đôi so le: Xe chẵn bên trái, xe lẻ bên phải, khoảng cách 5.5 mét mỗi hàng
       const rowIndex = Math.floor(i / 2);
       const isLeft = i % 2 === 0;
       const distanceBehindLeader = rowIndex * 5.5 + (isLeft ? 0 : 2.75);
@@ -400,38 +461,38 @@ export class RacingInstance {
       if (initialProgress < 0) initialProgress += 1.0;
 
       const initialLane = isLeft ? -0.34 : 0.34;
+      const baseCruise = rng.float(465, 535);
 
       const state: AICarState = {
         id: `car_${this.id}_${i + 1}`,
-        name: `${carName} #${i + 1}`,
+        name: `${carName} #${carNum}`,
         driverName: driver,
-        color: colorInfo.name,
-        hexColor: colorInfo.hex,
-        type: i % 2 === 0 ? 'hypercar' : 'formula',
-        // Tốc độ thay đổi ngẫu nhiên 400 - 600 km/h, trung bình ~500 km/h, tối đa 650 km/h
-        speed: 460 + (i % 5) * 12 + Math.random() * 10,
-        targetSpeed: 485 + (i % 5) * 8,
-        maxSpeed: 650, // Tối đa đạt 650 km/h
-        baseCruiseSpeed: 480 + (i % 5) * 10, // Mỗi xe một dải tốc độ riêng biệt
-        targetPullAwayGoal: 320 + Math.random() * 180, // Mục tiêu bứt xa 300 - 500m
+        color: baseColor.name,
+        hexColor: carCol.getHex(),
+        type: vehicleType,
+        speed: baseCruise + rng.float(-15, 25),
+        targetSpeed: baseCruise + rng.float(-10, 30),
+        maxSpeed: 650,
+        baseCruiseSpeed: baseCruise,
+        targetPullAwayGoal: rng.float(300, 500),
         overtakePullAwayDist: 0,
         cooldownTimer: 0,
-        attackPhaseTimer: 1.0 + Math.random() * 3.0,
-        acceleration: 3.5 + Math.random() * 0.8,
+        attackPhaseTimer: rng.float(0.8, 4.2),
+        acceleration: rng.float(3.4, 4.6),
         lap: 0,
         lapProgress: initialProgress,
         lateralOffset: initialLane,
         targetLateralOffset: initialLane,
         steerAngle: 0,
         rank: i + 1,
-        aggression: 0.82 + Math.random() * 0.18,
+        aggression: rng.float(0.75, 1.0),
         isDrifting: false,
         driftAngle: 0,
         collisionCooldown: 0,
         meshIndex: meshIdx,
         inTunnel: false,
-        laneChangeTimer: 1.0 + Math.random() * 2.5,
-        nitroBoostTimer: i > 0 ? (1.5 + Math.random() * 2.5) : 0, // Xe sau sẵn sàng bứt tốc ngay từ đầu
+        laneChangeTimer: rng.float(0.9, 3.2),
+        nitroBoostTimer: i > 0 ? rng.float(1.2, 3.8) : rng.float(0, 1.0),
         nitroCooldown: 0,
         isHyperBoosting: false
       };
@@ -462,9 +523,9 @@ export class RacingInstance {
     const baseBiome = BIOMES.find(b => b.id === biomeId);
     if (!baseBiome || !this.seedData) return;
     const rawBiome = { ...baseBiome, roadLayoutType: this.seedData.roadLayout };
-    const biome = customizeBiomeBySeed(rawBiome, this.seedData.seed, this.id);
+    const biome = customizeBiomeBySeed(rawBiome, this.seedData.seed, this.id, this.videoChunkIndex);
     this.seedData.biome = biome;
-    this.scene.background = new THREE.Color(biome.skyColor);
+    this.scene.background = createSkyAtmosphereTexture(biome.skyColor, biome.fogColor, this.seedData.seed);
     this.scene.fog = new THREE.Fog(biome.fogColor, 5000, 28000);
     this.dirLight.intensity = Math.max(2.2, biome.lightIntensity || 2.4);
     this.hemiLight.color.setHex(biome.ambientColor);
@@ -476,16 +537,15 @@ export class RacingInstance {
     if (durationSeconds !== undefined) {
       this.totalChunkDuration = durationSeconds;
     }
+    this.videoChunkIndex++;
+    const nextSeed = generateHighEntropySeed(this.id, this.videoChunkIndex);
     if (carsPerRace !== undefined && carsPerRace > 0) {
       this.desiredCarCount = Math.max(4, Math.min(35, carsPerRace));
     } else {
-      // 0 = 🎲 Random ngẫu nhiên phân bổ từ 6 đến 35 xe độc bản cho từng luồng
-      const minCars = 6;
-      const maxCars = 35;
-      this.desiredCarCount = minCars + ((this.id * 3 + Math.abs(Date.now())) % (maxCars - minCars + 1));
+      // 0 = 🎲 Random ngẫu nhiên phân bổ từ 6 đến 35 xe độc bản theo seed
+      this.desiredCarCount = createSeededPRNG(nextSeed, this.id * 271).int(6, 35);
     }
-    this.videoChunkIndex++;
-    this.initRace();
+    this.initRace(nextSeed);
   }
 
   update(
@@ -520,7 +580,33 @@ export class RacingInstance {
       activeCollisionPos = collisionCarPos || null;
       activeCollisionIntensity = collisionIntensity || 0;
 
-      // 2. Update Camera Director
+      // 2. Đặt Vạch Đích DUY NHẤT 1 lần ở chặng cuối cùng ngay phía trước xe dẫn đầu
+      const remainingTime = Math.max(0, this.totalChunkDuration - this.chunkTimeElapsed);
+      if (
+        !this.hasPlacedFinalFinishLine &&
+        this.track.finishLineGroup &&
+        remainingTime <= Math.min(8.0, this.totalChunkDuration * 0.25)
+      ) {
+        const leaderCar = this.cars.find(c => c.state.rank === 1) || this.cars[0];
+        const leaderUnitsPerSec = ((leaderCar.state.speed || 500) * 1000 / 3600) * 6.2;
+        const timeToLine = Math.max(0.4, remainingTime - 0.8);
+        const aheadDist = Math.max(180, Math.min(this.track.totalLength * 0.45, timeToLine * leaderUnitsPerSec));
+        const finishU = ((leaderCar.state.lapProgress + aheadDist / this.track.totalLength) % 1.0 + 1.0) % 1.0;
+
+        const fPos = safeGetPointAt(this.track.curve, finishU);
+        const fTan = safeGetTangentAt(this.track.curve, finishU);
+        const fUp = new THREE.Vector3(0, 1, 0);
+        const fNorm = new THREE.Vector3().crossVectors(fTan, fUp).normalize();
+        const finishQuat = new THREE.Quaternion().setFromRotationMatrix(
+          new THREE.Matrix4().makeBasis(fNorm.negate(), fUp, fTan)
+        );
+        this.track.finishLineGroup.position.copy(fPos);
+        this.track.finishLineGroup.quaternion.copy(finishQuat);
+        this.track.finishLineGroup.visible = true;
+        this.hasPlacedFinalFinishLine = true;
+      }
+
+      // 3. Update Camera Director
       this.cameraDirector.update(
         this.cars,
         delta,

@@ -9,6 +9,7 @@ export interface CodecSelection {
   codecString: string;
   muxerVideoCodec: 'avc' | 'V_VP9' | 'V_VP8';
   mimeType: string;
+  hardwareAcceleration: HardwareAcceleration;
 }
 
 const AVC_PRIORITY_LIST = [
@@ -53,7 +54,7 @@ export class WebCodecsVideoEncoderSession {
   }
 
   /**
-   * Tự động tìm kiếm Profile AVC H.264 tương thích cao nhất (Level 5.1 / 4.2)
+   * Tự động tìm kiếm Profile AVC H.264 tương thích cao nhất (ưu tiên phần cứng GPU)
    * hoặc chuyển đổi dự phòng sang WebM VP9/VP8
    */
   async initialize(preferredFormat: 'mp4' | 'webm' = 'mp4'): Promise<boolean> {
@@ -61,30 +62,36 @@ export class WebCodecsVideoEncoderSession {
       return false;
     }
 
+    const hwPrefs: HardwareAcceleration[] = ['prefer-hardware', 'no-preference'];
+
     // 1. Thử nghiệm AVC H.264 nếu ưu tiên MP4
     if (preferredFormat === 'mp4') {
-      for (const codec of AVC_PRIORITY_LIST) {
-        try {
-          const support = await VideoEncoder.isConfigSupported({
-            codec,
-            width: this.width,
-            height: this.height,
-            bitrate: this.bitrate,
-            framerate: this.fps,
-            hardwareAcceleration: 'no-preference'
-          });
-          if (support && support.supported) {
-            this.codecSelection = {
-              container: 'mp4',
-              codecString: codec,
-              muxerVideoCodec: 'avc',
-              mimeType: 'video/mp4'
-            };
-            break;
+      for (const hw of hwPrefs) {
+        for (const codec of AVC_PRIORITY_LIST) {
+          try {
+            const support = await VideoEncoder.isConfigSupported({
+              codec,
+              width: this.width,
+              height: this.height,
+              bitrate: this.bitrate,
+              framerate: this.fps,
+              hardwareAcceleration: hw
+            });
+            if (support && support.supported) {
+              this.codecSelection = {
+                container: 'mp4',
+                codecString: codec,
+                muxerVideoCodec: 'avc',
+                mimeType: 'video/mp4',
+                hardwareAcceleration: hw
+              };
+              break;
+            }
+          } catch {
+            // thử profile tiếp theo
           }
-        } catch {
-          // thử profile tiếp theo
         }
+        if (this.codecSelection) break;
       }
     }
 
@@ -95,31 +102,35 @@ export class WebCodecsVideoEncoderSession {
         { codec: 'vp9', muxer: 'V_VP9' },
         { codec: 'vp8', muxer: 'V_VP8' }
       ];
-      for (const item of vpCandidates) {
-        try {
-          const support = await VideoEncoder.isConfigSupported({
-            codec: item.codec,
-            width: this.width,
-            height: this.height,
-            bitrate: this.bitrate,
-            framerate: this.fps,
-            hardwareAcceleration: 'no-preference'
-          });
-          if (support && support.supported) {
-            this.codecSelection = {
-              container: 'webm',
-              codecString: item.codec,
-              muxerVideoCodec: item.muxer,
-              mimeType: 'video/webm'
-            };
-            break;
-          }
-        } catch {}
+      for (const hw of hwPrefs) {
+        for (const item of vpCandidates) {
+          try {
+            const support = await VideoEncoder.isConfigSupported({
+              codec: item.codec,
+              width: this.width,
+              height: this.height,
+              bitrate: this.bitrate,
+              framerate: this.fps,
+              hardwareAcceleration: hw
+            });
+            if (support && support.supported) {
+              this.codecSelection = {
+                container: 'webm',
+                codecString: item.codec,
+                muxerVideoCodec: item.muxer,
+                mimeType: 'video/webm',
+                hardwareAcceleration: hw
+              };
+              break;
+            }
+          } catch {}
+        }
+        if (this.codecSelection) break;
       }
     }
 
     if (!this.codecSelection) {
-      console.warn('Không tìm thấy Codec WebCodecs được hỗ trợ cho 1080x1920');
+      console.warn(`Không tìm thấy Codec WebCodecs được hỗ trợ cho ${this.width}x${this.height}`);
       return false;
     }
 
@@ -279,14 +290,27 @@ export class WebCodecsVideoEncoderSession {
         }
       }
 
-      this.encoder.configure({
+      const encoderConfig: VideoEncoderConfig = {
         codec: this.codecSelection.codecString,
         width: this.width,
         height: this.height,
         bitrate: this.bitrate,
         framerate: this.fps,
-        hardwareAcceleration: 'no-preference'
-      });
+        hardwareAcceleration: this.codecSelection.hardwareAcceleration,
+        latencyMode: 'quality'
+      };
+      try {
+        this.encoder.configure(encoderConfig);
+      } catch {
+        this.encoder.configure({
+          codec: this.codecSelection.codecString,
+          width: this.width,
+          height: this.height,
+          bitrate: this.bitrate,
+          framerate: this.fps,
+          hardwareAcceleration: this.codecSelection.hardwareAcceleration
+        });
+      }
 
       return true;
     } catch (err) {
@@ -296,43 +320,50 @@ export class WebCodecsVideoEncoderSession {
   }
 
   /**
-   * Kiểm soát áp lực ngược (Backpressure Pipeline với ondequeue):
-   * Duy trì hàng đợi GPU ở mức tối ưu (ngưỡng 4-6 frames) để GPU Hardware Encoder chạy hết công suất
-   * mà không gây tràn bộ nhớ (< 50MB RAM/VRAM).
-   * Khi hàng đợi vượt quá 4 khung, tiến trình tạm dừng và chờ sự kiện encoder.ondequeue từ WebCodecs.
-   * Loại bỏ hoàn toàn lỗi treo Watchdog hoặc Codec reclaimed, đồng thời tăng tốc độ render lên gấp 4-5 lần!
+   * Kiểm soát áp lực ngược (Backpressure Pipeline chuẩn xác với ondequeue):
+   * Chờ thực sự cho tới khi encodeQueueSize <= 2 để tránh tràn hàng đợi gây drop frame hoặc lag video!
    */
   private async waitBackpressure(): Promise<void> {
-    if (!this.encoder || this.encoder.state !== 'configured') return;
+    if (!this.encoder || this.encoder.state !== 'configured' || this.hasError) return;
+    if (this.encoder.encodeQueueSize <= 3) return;
 
-    if (this.encoder.encodeQueueSize > 4) {
-      await new Promise<void>((resolve) => {
-        let resolved = false;
-        const fallbackTimer = setTimeout(() => {
-          if (!resolved) {
-            resolved = true;
-            if (this.encoder) this.encoder.ondequeue = null;
-            resolve();
-          }
-        }, 5);
+    await new Promise<void>((resolve) => {
+      let resolved = false;
+      const startWait = performance.now();
 
+      const cleanupAndResolve = () => {
+        if (resolved) return;
+        resolved = true;
+        clearInterval(pollTimer);
         if (this.encoder) {
-          this.encoder.ondequeue = () => {
-            if (!resolved && this.encoder && this.encoder.encodeQueueSize <= 2) {
-              resolved = true;
-              clearTimeout(fallbackTimer);
-              this.encoder.ondequeue = null;
-              resolve();
-            }
-          };
+          this.encoder.ondequeue = null;
         }
-      });
-    }
+        resolve();
+      };
+
+      const checkReady = () => {
+        if (
+          !this.encoder ||
+          this.encoder.state !== 'configured' ||
+          this.hasError ||
+          this.encoder.encodeQueueSize <= 2 ||
+          performance.now() - startWait > 10000
+        ) {
+          cleanupAndResolve();
+        }
+      };
+
+      const pollTimer = setInterval(checkReady, 8);
+      if (this.encoder) {
+        this.encoder.ondequeue = checkReady;
+      }
+      checkReady();
+    });
   }
 
   /**
-   * Thêm một khung hình mới vào bộ mã hóa WebCodecs với dấu thời gian micro-giây chính xác
-   * Hỗ trợ timestamp tùy chỉnh để video 2 phút (120s) được mã hóa trọn vẹn và siêu tốc
+   * Thêm một khung hình mới vào bộ mã hóa WebCodecs với dấu thời gian micro-giây cộng dồn tuyệt đối
+   * Đảm bảo không lệch hay chồng chéo 1µs giữa các frame liên tiếp (zero frame-timing jitter)
    */
   async addFrame(
     canvas: HTMLCanvasElement,
@@ -351,41 +382,40 @@ export class WebCodecsVideoEncoderSession {
       return false;
     }
 
-    // 2. Dấu thời gian micro giây chuẩn xác tuyệt đối
+    // 2. Dấu thời gian micro giây cộng dồn liên tục không trôi sai số làm tròn
     const timestampMicros = customTimestampMicros !== undefined
       ? Math.round(customTimestampMicros)
-      : Math.round(frameIndex * (1_000_000 / this.fps));
-    const durationMicros = customDurationMicros !== undefined
-      ? Math.round(customDurationMicros)
-      : Math.round(1_000_000 / this.fps);
+      : Math.round((frameIndex * 1_000_000) / this.fps);
+    const nextTimestampMicros = customTimestampMicros !== undefined
+      ? Math.round(customTimestampMicros + (customDurationMicros ?? (1_000_000 / this.fps)))
+      : Math.round(((frameIndex + 1) * 1_000_000) / this.fps);
+    const durationMicros = Math.max(1, nextTimestampMicros - timestampMicros);
 
     try {
-      // SỬ DỤNG createImageBitmap ĐỂ TẠO ẢNH CHỤP BẤT BIẾN (IMMUTABLE SNAPSHOT):
-      // Ngăn chặn triệt để lỗi Xé Hình (Screen Tearing) do GPU texture bị đọc bất đồng bộ trong khi canvas bị vẽ đè
-      let source: CanvasImageSource = canvas;
-      let bitmap: ImageBitmap | null = null;
-      if (typeof createImageBitmap !== 'undefined') {
-        try {
-          bitmap = await createImageBitmap(canvas);
-          source = bitmap;
-        } catch {
-          source = canvas;
-        }
+      let videoFrame: VideoFrame;
+      let fallbackBitmap: ImageBitmap | null = null;
+      try {
+        // Đọc trực tiếp đồng bộ từ Canvas trước khi đóng VideoFrame -> tốc độ cao & không gây jitter async
+        videoFrame = new VideoFrame(canvas, {
+          timestamp: timestampMicros,
+          duration: durationMicros
+        });
+      } catch {
+        fallbackBitmap = await createImageBitmap(canvas);
+        videoFrame = new VideoFrame(fallbackBitmap, {
+          timestamp: timestampMicros,
+          duration: durationMicros
+        });
       }
 
-      const videoFrame = new VideoFrame(source, {
-        timestamp: timestampMicros,
-        duration: durationMicros
-      });
-
-      // Tạo keyframe định kỳ (mỗi 60 frames chuẩn)
-      const isKeyFrame = frameIndex % 60 === 0;
+      // Tạo keyframe định kỳ chuẩn mỗi giây
+      const keyInterval = Math.max(30, Math.round(this.fps));
+      const isKeyFrame = frameIndex % keyInterval === 0;
       this.encoder.encode(videoFrame, isKeyFrame ? { keyFrame: true } : undefined);
 
-      // Giải phóng ngay texture GPU và bitmap để không tích tụ bộ nhớ RAM/VRAM
       videoFrame.close();
-      if (bitmap) {
-        bitmap.close();
+      if (fallbackBitmap) {
+        fallbackBitmap.close();
       }
       this.frameCount++;
       return true;
@@ -405,7 +435,9 @@ export class WebCodecsVideoEncoderSession {
     biome?: any,
     weather?: any,
     carsCount: number = 15,
-    telemetry?: InstanceTelemetrySnapshot[]
+    telemetry?: InstanceTelemetrySnapshot[],
+    driversList?: string[],
+    trackName?: string
   ): Promise<{ blob: Blob; ext: 'mp4' | 'webm'; frameCount: number } | null> {
     if (!this.encoder || this.frameCount === 0) {
       return null;
@@ -439,21 +471,27 @@ export class WebCodecsVideoEncoderSession {
               seed,
               biome,
               weather,
-              commentaryLang
+              commentaryLang,
+              driversList,
+              trackName
             );
           } else {
-            pcm = audioEngine.generateRacingAudioPCM(
+            pcm = await audioEngine.generateRacingAudioPCMAsync(
               totalDuration,
               this.audioSampleRate,
               instanceId,
               seed,
               biome,
               weather,
-              carsCount
+              carsCount,
+              commentaryLang,
+              driversList,
+              trackName
             );
           }
           const chunkSize = 2048;
           const totalFrames = pcm.totalSamples;
+          let lastAudioYield = performance.now();
 
           for (let offset = 0; offset < totalFrames; offset += chunkSize) {
             const framesInChunk = Math.min(chunkSize, totalFrames - offset);
@@ -473,6 +511,11 @@ export class WebCodecsVideoEncoderSession {
 
             this.audioEncoder.encode(audioData);
             audioData.close();
+
+            if (this.audioEncoder.encodeQueueSize > 8 || performance.now() - lastAudioYield >= 6) {
+              await new Promise(r => setTimeout(r, 0));
+              lastAudioYield = performance.now();
+            }
           }
 
           if (this.audioEncoder.state === 'configured') {

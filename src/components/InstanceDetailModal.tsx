@@ -3,11 +3,12 @@
  */
 import React, { useState } from 'react';
 import { X, Camera, Trophy, Gauge, Activity, RefreshCw, Compass, MapPin, Sparkles, Layers, Lock, Unlock } from 'lucide-react';
-import { CameraMode, InstanceRuntime, RoadLayoutType } from '../types';
+import { AspectRatioOption, CameraMode, InstanceRuntime, RoadLayoutType } from '../types';
 import { ROAD_LAYOUT_PRESETS, BIOMES } from '../engine/scenarioGenerator';
 
 interface InstanceDetailModalProps {
   instance: InstanceRuntime | null;
+  aspectRatio?: AspectRatioOption;
   onClose: () => void;
   onSelectCamera: (instanceId: number, mode: CameraMode) => void;
   onUnlockCamera?: (instanceId: number) => void;
@@ -18,6 +19,7 @@ interface InstanceDetailModalProps {
 
 export const InstanceDetailModal: React.FC<InstanceDetailModalProps> = ({
   instance,
+  aspectRatio = '9:16',
   onClose,
   onSelectCamera,
   onUnlockCamera,
@@ -105,8 +107,14 @@ export const InstanceDetailModal: React.FC<InstanceDetailModalProps> = ({
     {
       mode: CameraMode.PANORAMIC,
       label: '3. Toàn Cảnh Từ Trên Cao (Panoramic)',
-      desc: 'Góc truyền hình trên cao 30m bao quát toàn bộ khúc cua và đoàn xe',
+      desc: 'Góc truyền hình dốc từ trên cao nhìn xuống bao quát toàn bộ khúc cua và đoàn xe',
       tag: 'Toàn Cảnh Cao'
+    },
+    {
+      mode: CameraMode.HIGH_SPORTS_PANORAMA,
+      label: '3b. Toàn Cảnh Thể Thao Trên Cao (Sports Sky-Blimp)',
+      desc: 'Góc quay thể thao trên cao chuẩn truyền hình quan sát toàn đoàn đua so kè',
+      tag: 'Thể Thao Cao'
     },
     {
       mode: CameraMode.MULTI_CAR_FRONT_FACING,
@@ -123,14 +131,8 @@ export const InstanceDetailModal: React.FC<InstanceDetailModalProps> = ({
     {
       mode: CameraMode.MULTI_CAR_OVERTAKE_WIDE,
       label: '6. Toàn Cảnh So Kè Nhiều Xe',
-      desc: 'Góc chéo trên cao bao quát toàn cảnh nhiều xe đua đang so kè vượt mặt',
+      desc: 'Góc chéo phía trước quay ngược về sau 45° sát xe 5m bao quát pha so kè nhiều xe',
       tag: 'Nhiều Xe Đua'
-    },
-    {
-      mode: CameraMode.TRACKSIDE_TELEPHOTO,
-      label: '7. Telephoto Ven Đường (85mm)',
-      desc: 'Máy quay đứng ven đường lia Pan-Tilt theo xe cực nét và chân thực',
-      tag: '85mm Tele'
     },
     {
       mode: CameraMode.TRACKSIDE_APEX,
@@ -197,7 +199,7 @@ export const InstanceDetailModal: React.FC<InstanceDetailModalProps> = ({
                 </span>
               </h2>
               <p className="text-[11px] text-slate-400 font-mono">
-                Mã Seed: #{instance.seedData.seed} &bull; Thời tiết: {instance.seedData.weather} &bull; 60 FPS 9:16
+                Mã Seed: #{instance.seedData.seed} &bull; Thời tiết: {instance.seedData.weather} &bull; 60 FPS {aspectRatio}
               </p>
             </div>
           </div>

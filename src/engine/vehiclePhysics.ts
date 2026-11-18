@@ -553,11 +553,11 @@ export class VehiclePhysicsSystem {
         steerSpeed = 8.5 * (s.aggression + 0.5); // Lạng lách siêu tốc né xe
       }
       const steerDiff = s.targetLateralOffset - s.lateralOffset;
-      s.lateralOffset += steerDiff * Math.min(1.0, delta * steerSpeed);
+      s.lateralOffset += steerDiff * (1.0 - Math.exp(-steerSpeed * delta));
       s.lateralOffset = Math.max(-0.82, Math.min(0.82, s.lateralOffset));
       
-      // Bẻ lái bánh trước và nghiêng thân xe theo đúng hướng đảo làn
-      s.steerAngle = THREE.MathUtils.lerp(s.steerAngle, steerDiff * 1.1, Math.min(1.0, delta * 12.0));
+      // Bẻ lái bánh trước và nghiêng thân xe êm mượt theo đúng hướng đảo làn
+      s.steerAngle = THREE.MathUtils.lerp(s.steerAngle, steerDiff * 1.1, 1.0 - Math.exp(-12.0 * delta));
 
       // Tốc độ di chuyển thực tế trên đường đua: nâng cấp tỉ lệ 6.2x mang lại cảm giác xé gió 500 - 650 km/h đỉnh cao
       const speedUnitsPerSec = (s.speed * 1000 / 3600) * 6.2;
@@ -585,10 +585,10 @@ export class VehiclePhysicsSystem {
         } else if (hasExtremeSwerve) {
           targetDrift = -Math.sign(steerDiff) * 0.16;
         }
-        s.driftAngle = THREE.MathUtils.lerp(s.driftAngle, targetDrift, Math.min(1.0, delta * 8.0));
+        s.driftAngle = THREE.MathUtils.lerp(s.driftAngle, targetDrift, 1.0 - Math.exp(-8.0 * delta));
       } else {
         s.isDrifting = false;
-        s.driftAngle = THREE.MathUtils.lerp(s.driftAngle, 0, Math.min(1.0, delta * 10.0));
+        s.driftAngle = THREE.MathUtils.lerp(s.driftAngle, 0, 1.0 - Math.exp(-10.0 * delta));
       }
 
       // Update collision cooldown
@@ -619,30 +619,31 @@ export class VehiclePhysicsSystem {
           collisionCarPos = c1.group.position.clone();
           collisionIntensity = Math.min(1.0, 0.45 + (Math.abs(c1.state.speed - c2.state.speed) / 55));
 
-          // 1. ĐẨY LẠNG LÁCH TÁCH LÀN NGANG (Lateral Repulsion / Lạng lách tách làn lập tức)
+          // 1. ĐẨY LẠNG LÁCH TÁCH LÀN NGANG MƯỢT MÀ (Không giật cục 1 frame)
           const latOverlap = MIN_LAT_DIST - lateralDist;
-          const latPushAmount = (latOverlap / (trackWidth / 2)) * 0.65; // Đẩy dứt khoát sang 2 bên
+          const rawPush = (latOverlap / (trackWidth / 2)) * 0.55;
+          const latStep = Math.min(rawPush, 2.4 * delta);
           const pushDir = c1.state.lateralOffset >= c2.state.lateralOffset ? 1 : -1;
-          
-          c1.state.lateralOffset = Math.max(-0.82, Math.min(0.82, c1.state.lateralOffset + pushDir * latPushAmount));
-          c2.state.lateralOffset = Math.max(-0.82, Math.min(0.82, c2.state.lateralOffset - pushDir * latPushAmount));
-          
-          // Cập nhật ngay targetLateralOffset để xe duy trì làn mới né tránh
-          c1.state.targetLateralOffset = c1.state.lateralOffset;
-          c2.state.targetLateralOffset = c2.state.lateralOffset;
 
-          // 2. NGĂN CHẶN ĐI XUYÊN DỌC (Anti-Clipping Longitudinal Impenetrability)
-          // Xe chạy sau tuyệt đối KHÔNG ĐƯỢC đi xuyên qua đuôi xe chạy trước!
+          c1.state.lateralOffset = Math.max(-0.82, Math.min(0.82, c1.state.lateralOffset + pushDir * latStep));
+          c2.state.lateralOffset = Math.max(-0.82, Math.min(0.82, c2.state.lateralOffset - pushDir * latStep));
+
+          c1.state.targetLateralOffset = Math.max(-0.78, Math.min(0.78, c1.state.lateralOffset + pushDir * 0.25));
+          c2.state.targetLateralOffset = Math.max(-0.78, Math.min(0.78, c2.state.lateralOffset - pushDir * 0.25));
+
+          // 2. GIỮ KHOẢNG CÁCH DỌC ÊM ÁI (Không teleport xe giật lùi trong 1 frame)
           const trailingCar = p1Dist < p2Dist ? c1 : c2;
           const leadingCar = p1Dist < p2Dist ? c2 : c1;
 
-          // Nếu khoảng cách ngang còn quá hẹp (< 1.8m), xe sau phải lách hoặc giữ khoảng cách sau xe trước, không được xuyên qua
           if (lateralDist < 1.8) {
-            trailingCar.state.lapProgress = Math.max(0, leadingCar.state.lapProgress - (MIN_LONG_DIST / totalLength));
-            // Xe sau chủ động đánh lái lách sang làn khác để vượt
-            const steerAwayDir = trailingCar.state.lateralOffset > 0 ? -0.34 : 0.34;
-            trailingCar.state.targetLateralOffset = Math.max(-0.75, Math.min(0.75, trailingCar.state.lateralOffset + steerAwayDir));
-            trailingCar.state.speed = Math.min(trailingCar.state.speed, leadingCar.state.speed * 0.98);
+            const longOverlap = MIN_LONG_DIST - longitudinalDist;
+            if (longOverlap > 0) {
+              const smoothBackoffMeters = Math.min(longOverlap * 0.28, 16.0 * delta);
+              trailingCar.state.lapProgress = ((trailingCar.state.lapProgress - smoothBackoffMeters / totalLength) % 1.0 + 1.0) % 1.0;
+            }
+            const steerAwayDir = trailingCar.state.lateralOffset > 0 ? -0.40 : 0.40;
+            trailingCar.state.targetLateralOffset = Math.max(-0.76, Math.min(0.76, trailingCar.state.lateralOffset + steerAwayDir));
+            trailingCar.state.speed = Math.max(400, Math.min(trailingCar.state.speed, leadingCar.state.speed * 0.92));
           }
         }
       }

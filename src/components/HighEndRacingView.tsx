@@ -36,11 +36,18 @@ import {
   X,
   Mic,
   MicOff,
-  Globe
+  Globe,
+  Image as ImageIcon,
+  Upload,
+  Sparkles,
+  Layers,
+  RefreshCw
 } from 'lucide-react';
 import { generateFamousDriversVideoFileName, FAMOUS_5_DRIVERS, FULL_STARTING_GRID_DRIVERS, DriverGridEntry } from '../utils/naming';
 import { commentaryEngine } from '../engine/commentaryEngine';
 import { BroadcastCommentaryTicker } from './BroadcastCommentaryTicker';
+import { PRESET_WALLPAPERS, PresetWallpaper } from '../engine/presetWallpapers';
+import fixWebmDuration from 'fix-webm-duration';
 
 interface HighEndRacingViewProps {
   onSwitchToVideoFactory: () => void;
@@ -105,6 +112,7 @@ export function HighEndRacingView({ onSwitchToVideoFactory }: HighEndRacingViewP
   const [isEditingDriver, setIsEditingDriver] = useState<boolean>(false);
   const [driverInput, setDriverInput] = useState<string>('Cristiano Ronaldo');
   const [selectedTrack, setSelectedTrack] = useState<string>('GRAND_PRIX_OVAL');
+  const [speedMultiplier, setSpeedMultiplier] = useState<number>(2.0);
 
   // Ghi hình gameplay video vừa chơi và Tự động tải xuống
   const [autoDownloadGameplay, setAutoDownloadGameplay] = useState<boolean>(true);
@@ -114,9 +122,19 @@ export function HighEndRacingView({ onSwitchToVideoFactory }: HighEndRacingViewP
   const [lastRecordedBlob, setLastRecordedBlob] = useState<Blob | null>(null);
   const [lastRecordedFileName, setLastRecordedFileName] = useState<string>('');
 
+  // Custom Background States (Ảnh nền game tùy chọn)
+  const [showBackgroundModal, setShowBackgroundModal] = useState<boolean>(false);
+  const [customBgUrl, setCustomBgUrl] = useState<string | null>(null);
+  const [customBgMode, setCustomBgMode] = useState<'360' | 'BACKDROP'>('360');
+  const [customBgName, setCustomBgName] = useState<string>('Bầu trời 3D mặc định');
+  const [urlInput, setUrlInput] = useState<string>('');
+  const [bgStatusMessage, setBgStatusMessage] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
   const recordingTimerRef = useRef<any>(null);
+  const recordingStartTimeRef = useRef<number>(0);
   const startGameplayRecordingRef = useRef<() => void>(() => {});
   const stopGameplayRecordingRef = useRef<() => void>(() => {});
 
@@ -128,6 +146,7 @@ export function HighEndRacingView({ onSwitchToVideoFactory }: HighEndRacingViewP
     audioEngine.init();
 
     const game = new PlayableRacingGame(canvasRef.current);
+    game.speedMultiplier = 2.0;
     gameRef.current = game;
 
     game.onTelemetryUpdate = (t) => {
@@ -181,6 +200,8 @@ export function HighEndRacingView({ onSwitchToVideoFactory }: HighEndRacingViewP
         setCameraMode(nextCam);
       } else if (e.code === 'KeyG') {
         setShowGridOverlay(prev => !prev);
+      } else if (e.code === 'KeyB') {
+        setShowBackgroundModal(prev => !prev);
       } else if (e.code === 'KeyR') {
         game.resetCar();
       } else if (e.code === 'KeyM') {
@@ -210,11 +231,13 @@ export function HighEndRacingView({ onSwitchToVideoFactory }: HighEndRacingViewP
       if (keysPressed['KeyD'] || keysPressed['ArrowRight']) steer -= 1;
 
       const handbrake = !!keysPressed['Space'];
+      const boost = !!(keysPressed['ShiftLeft'] || keysPressed['ShiftRight']);
 
       gameRef.current.input.throttle = throttle;
       gameRef.current.input.brake = brake;
       gameRef.current.input.steer = steer;
       gameRef.current.input.handbrake = handbrake;
+      gameRef.current.input.boost = boost;
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -265,7 +288,75 @@ export function HighEndRacingView({ onSwitchToVideoFactory }: HighEndRacingViewP
 
   const currentTrackInfo = ROAD_LAYOUT_PRESETS.find(p => p.id === selectedTrack);
 
-  // Bắt đầu ghi hình gameplay thực tế của người chơi từ WebGL Canvas
+  // Xử lý tải ảnh bình thường từ máy tính
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string;
+      if (dataUrl && gameRef.current) {
+        setCustomBgUrl(dataUrl);
+        setCustomBgName(`📁 ${file.name}`);
+        gameRef.current.setCustomBackgroundImage(dataUrl, customBgMode, (success) => {
+          if (success) {
+            setBgStatusMessage(`Đã áp dụng ảnh: ${file.name}`);
+            setTimeout(() => setBgStatusMessage(null), 3500);
+          }
+        });
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Xử lý chọn phông nền mẫu có sẵn
+  const handleSelectPreset = (preset: PresetWallpaper) => {
+    if (!gameRef.current) return;
+    const dataUrl = preset.getDataUrl();
+    setCustomBgUrl(dataUrl);
+    setCustomBgName(preset.name);
+    gameRef.current.setCustomBackgroundImage(dataUrl, customBgMode, (success) => {
+      if (success) {
+        setBgStatusMessage(`Đã áp dụng phông nền: ${preset.name}`);
+        setTimeout(() => setBgStatusMessage(null), 3500);
+      }
+    });
+  };
+
+  // Xử lý áp dụng URL ảnh từ internet
+  const handleApplyUrl = () => {
+    if (!urlInput.trim() || !gameRef.current) return;
+    const trimmedUrl = urlInput.trim();
+    setCustomBgUrl(trimmedUrl);
+    setCustomBgName('🔗 Ảnh từ liên kết Internet');
+    gameRef.current.setCustomBackgroundImage(trimmedUrl, customBgMode, (success) => {
+      if (success) {
+        setBgStatusMessage('Đã tải ảnh nền từ URL thành công!');
+        setUrlInput('');
+        setTimeout(() => setBgStatusMessage(null), 3500);
+      }
+    });
+  };
+
+  // Khôi phục bầu trời 3D mặc định
+  const handleResetBackground = () => {
+    if (!gameRef.current) return;
+    setCustomBgUrl(null);
+    setCustomBgName('Bầu trời 3D mặc định');
+    gameRef.current.setCustomBackgroundImage(null);
+    setBgStatusMessage('Đã khôi phục bầu trời 3D mặc định');
+    setTimeout(() => setBgStatusMessage(null), 3500);
+  };
+
+  // Chuyển đổi chế độ chiếu ảnh: Bầu trời 360° vs Phông nền 2D
+  const handleBgModeChange = (mode: '360' | 'BACKDROP') => {
+    setCustomBgMode(mode);
+    if (customBgUrl && gameRef.current) {
+      gameRef.current.setCustomBackgroundImage(customBgUrl, mode);
+    }
+  };
+
+  // Bắt đầu ghi hình gameplay thực tế của người chơi từ WebGL Canvas (ưu tiên MP4/H.264 phần cứng)
   const startGameplayRecording = useCallback(() => {
     if (!canvasRef.current) return;
     try {
@@ -274,6 +365,7 @@ export function HighEndRacingView({ onSwitchToVideoFactory }: HighEndRacingViewP
       }
       recordedChunksRef.current = [];
       setRecordingSeconds(0);
+      recordingStartTimeRef.current = performance.now();
 
       const stream = canvasRef.current.captureStream(60);
       try {
@@ -282,14 +374,26 @@ export function HighEndRacingView({ onSwitchToVideoFactory }: HighEndRacingViewP
           stream.addTrack(audioTrack);
         }
       } catch {}
-      let mimeType = 'video/webm;codecs=vp9';
-      if (!MediaRecorder.isTypeSupported(mimeType)) {
-        mimeType = 'video/webm';
+
+      const candidates = [
+        'video/mp4;codecs=avc1',
+        'video/mp4',
+        'video/webm;codecs=h264',
+        'video/webm;codecs=vp8',
+        'video/webm;codecs=vp9',
+        'video/webm'
+      ];
+      let mimeType = 'video/webm';
+      for (const c of candidates) {
+        if (MediaRecorder.isTypeSupported(c)) {
+          mimeType = c;
+          break;
+        }
       }
 
       const recorder = new MediaRecorder(stream, {
         mimeType,
-        videoBitsPerSecond: 16000000
+        videoBitsPerSecond: 14_000_000
       });
 
       recorder.ondataavailable = (e) => {
@@ -298,17 +402,26 @@ export function HighEndRacingView({ onSwitchToVideoFactory }: HighEndRacingViewP
         }
       };
 
-      recorder.onstop = () => {
+      recorder.onstop = async () => {
         setIsRecordingGameplay(false);
         if (recordingTimerRef.current) {
           clearInterval(recordingTimerRef.current);
           recordingTimerRef.current = null;
         }
         if (recordedChunksRef.current.length === 0) return;
-        const blob = new Blob(recordedChunksRef.current, { type: mimeType });
+
+        const elapsedMs = Math.max(1000, Math.round(performance.now() - recordingStartTimeRef.current));
+        let blob = new Blob(recordedChunksRef.current, { type: mimeType });
+        const actualExt = mimeType.includes('mp4') ? 'mp4' : 'webm';
+        if (actualExt === 'webm') {
+          try {
+            blob = await fixWebmDuration(blob, elapsedMs);
+          } catch {}
+        }
+
         const fileName = generateFamousDriversVideoFileName({
           trackName: currentTrackInfo?.name || 'Grand_Prix_Oval',
-          ext: 'mp4',
+          ext: actualExt,
           suffix: 'VuaChoiGame'
         });
 
@@ -333,7 +446,7 @@ export function HighEndRacingView({ onSwitchToVideoFactory }: HighEndRacingViewP
         }
       };
 
-      recorder.start(1000);
+      recorder.start(500);
       mediaRecorderRef.current = recorder;
       setIsRecordingGameplay(true);
 
@@ -497,6 +610,20 @@ export function HighEndRacingView({ onSwitchToVideoFactory }: HighEndRacingViewP
               </button>
             ))}
           </div>
+
+          {/* Nút Chèn Ảnh Nền Game (Phím B) */}
+          <button
+            onClick={() => setShowBackgroundModal(prev => !prev)}
+            title="Chèn ảnh bình thường làm ảnh nền cho game (Phím B)"
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border transition ${
+              customBgUrl
+                ? 'bg-purple-950/70 border-purple-400 text-purple-300 shadow-[0_0_12px_rgba(168,85,247,0.3)]'
+                : 'bg-black/70 border-slate-800 text-slate-300 hover:text-white hover:border-slate-700'
+            }`}
+          >
+            <ImageIcon className="w-3.5 h-3.5 text-purple-400" />
+            <span className="hidden sm:inline">{customBgUrl ? 'Ảnh Nền (Bật)' : 'Ảnh Nền'}</span>
+          </button>
 
           {/* Bảng Danh Sách Tay Đua Button */}
           <button
@@ -875,6 +1002,82 @@ export function HighEndRacingView({ onSwitchToVideoFactory }: HighEndRacingViewP
 
           <div className="w-px h-8 bg-slate-800"></div>
 
+          {/* CHẾ ĐỘ TỐC ĐỘ GAME (SPEED BOOST MULTIPLIER) */}
+          <div className="flex items-center gap-1 bg-slate-950/90 p-1 rounded-xl border border-slate-800 pointer-events-auto">
+            <button
+              onClick={() => {
+                setSpeedMultiplier(1.0);
+                if (gameRef.current) gameRef.current.speedMultiplier = 1.0;
+              }}
+              className={`px-2 py-1 rounded-lg text-[10px] font-black transition cursor-pointer ${
+                speedMultiplier === 1.0
+                  ? 'bg-blue-600 text-white shadow font-bold'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+              title="Tốc độ tiêu chuẩn (1.0x)"
+            >
+              1.0X
+            </button>
+            <button
+              onClick={() => {
+                setSpeedMultiplier(1.5);
+                if (gameRef.current) gameRef.current.speedMultiplier = 1.5;
+              }}
+              className={`px-2 py-1 rounded-lg text-[10px] font-black transition cursor-pointer ${
+                speedMultiplier === 1.5
+                  ? 'bg-amber-500 text-black shadow font-bold'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+              title="Tốc độ Turbo Nitro (1.5x)"
+            >
+              ⚡ 1.5X
+            </button>
+            <button
+              onClick={() => {
+                setSpeedMultiplier(2.0);
+                if (gameRef.current) gameRef.current.speedMultiplier = 2.0;
+              }}
+              className={`px-2 py-1 rounded-lg text-[10px] font-black transition cursor-pointer ${
+                speedMultiplier === 2.0
+                  ? 'bg-gradient-to-r from-red-600 to-pink-600 text-white shadow font-bold ring-1 ring-red-400'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+              title="Tốc độ Hyper Siêu Tốc (2.0x - Khuyên dùng)"
+            >
+              🚀 2.0X HYPER
+            </button>
+            <button
+              onClick={() => {
+                setSpeedMultiplier(2.5);
+                if (gameRef.current) gameRef.current.speedMultiplier = 2.5;
+              }}
+              className={`px-2 py-1 rounded-lg text-[10px] font-black transition cursor-pointer ${
+                speedMultiplier === 2.5
+                  ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow font-bold ring-1 ring-purple-400'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+              title="Tốc độ Siêu Thanh Mach 2 (2.5x)"
+            >
+              🔥 2.5X
+            </button>
+            <button
+              onClick={() => {
+                setSpeedMultiplier(3.0);
+                if (gameRef.current) gameRef.current.speedMultiplier = 3.0;
+              }}
+              className={`px-2 py-1 rounded-lg text-[10px] font-black transition cursor-pointer ${
+                speedMultiplier === 3.0
+                  ? 'bg-gradient-to-r from-yellow-400 to-amber-500 text-black shadow font-bold ring-1 ring-yellow-300 animate-pulse'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+              title="Vận tốc ánh sáng Warp Speed (3.0x)"
+            >
+              ⚡ 3.0X WARP
+            </button>
+          </div>
+
+          <div className="w-px h-8 bg-slate-800"></div>
+
           {/* HIỂN THỊ ĐƯỜNG ĐUA TRÊN MÀN HÌNH GAME */}
           <div className="flex flex-col text-left font-mono">
             <span className="text-[9px] text-slate-400 font-bold uppercase">ĐƯỜNG ĐUA (10X DÀI)</span>
@@ -1027,6 +1230,12 @@ export function HighEndRacingView({ onSwitchToVideoFactory }: HighEndRacingViewP
                 <span>Phanh tay (Drift):</span>
                 <span className="font-mono text-white font-bold">Phím Space</span>
               </div>
+              <div className="flex justify-between bg-amber-950/40 border border-amber-500/30 p-2 rounded">
+                <span className="text-amber-300 font-bold flex items-center gap-1">
+                  <span>⚡ Nitro Boost (Bứt Tốc Xé Gió):</span>
+                </span>
+                <span className="font-mono text-amber-300 font-black">Phím Shift</span>
+              </div>
               <div className="flex justify-between bg-slate-800/60 p-2 rounded">
                 <span>Đổi góc camera:</span>
                 <span className="font-mono text-white font-bold">Phím C</span>
@@ -1042,6 +1251,10 @@ export function HighEndRacingView({ onSwitchToVideoFactory }: HighEndRacingViewP
               <div className="flex justify-between bg-slate-800/60 p-2 rounded">
                 <span>Bảng danh sách 12 tay đua:</span>
                 <span className="font-mono text-white font-bold">Phím G</span>
+              </div>
+              <div className="flex justify-between bg-slate-800/60 p-2 rounded text-purple-300 border border-purple-500/30">
+                <span>Chèn ảnh nền tùy chọn (JPG/PNG):</span>
+                <span className="font-mono text-white font-bold">Phím B</span>
               </div>
               <div className="flex justify-between bg-slate-800/60 p-2 rounded">
                 <span>Bảng hiệu năng F3:</span>
@@ -1137,6 +1350,206 @@ export function HighEndRacingView({ onSwitchToVideoFactory }: HighEndRacingViewP
                 className="px-5 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold rounded-xl shadow-lg transition"
               >
                 ĐÓNG BẢNG DANH SÁCH (G)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL CHÈN ẢNH BÌNH THƯỜNG LÀM ẢNH NỀN CHO GAME (PHÍM B) */}
+      {showBackgroundModal && (
+        <div className="absolute inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center pointer-events-auto z-50 p-4">
+          <div className="bg-slate-950 border border-purple-500/50 rounded-2xl p-6 max-w-2xl w-full shadow-[0_0_60px_rgba(168,85,247,0.3)] animate-fade-in font-sans flex flex-col max-h-[90vh]">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-purple-500/30 pb-3 mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-purple-950 border border-purple-500/50 flex items-center justify-center text-purple-400 font-bold shadow-lg">
+                  <ImageIcon className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-white uppercase tracking-wider flex items-center gap-2">
+                    <span>Chèn Ảnh Nền Cho Game</span>
+                    <span className="text-[10px] bg-purple-950 text-purple-300 px-2 py-0.5 rounded border border-purple-500/40">
+                      CUSTOM BACKGROUND
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Tải ảnh bình thường từ máy tính (JPG/PNG/WebP) hoặc chọn phông nền mẫu 3D
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowBackgroundModal(false)}
+                className="w-8 h-8 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center transition border border-slate-700"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Notification message */}
+            {bgStatusMessage && (
+              <div className="mb-3 p-2.5 rounded-xl bg-emerald-950/80 border border-emerald-500/60 text-emerald-300 text-xs font-semibold flex items-center gap-2 animate-fade-in">
+                <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>{bgStatusMessage}</span>
+              </div>
+            )}
+
+            {/* Status & Active Background info */}
+            <div className="mb-4 p-3 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2.5 truncate">
+                <span className="text-xs text-slate-400">Trạng thái:</span>
+                <span className={`text-xs font-bold px-2 py-0.5 rounded border ${
+                  customBgUrl
+                    ? 'bg-purple-950 text-purple-300 border-purple-500/40'
+                    : 'bg-slate-800 text-slate-300 border-slate-700'
+                }`}>
+                  {customBgName || 'Bầu trời 3D mặc định'}
+                </span>
+              </div>
+              {customBgUrl && (
+                <button
+                  onClick={handleResetBackground}
+                  className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold text-rose-300 bg-rose-950/60 border border-rose-500/40 hover:bg-rose-900 transition"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Khôi phục mặc định</span>
+                </button>
+              )}
+            </div>
+
+            {/* Projection Mode Selector: 360 vs Backdrop */}
+            <div className="mb-4">
+              <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block mb-1.5">
+                Chế độ hiển thị ảnh trong không gian 3D:
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => handleBgModeChange('360')}
+                  className={`p-2.5 rounded-xl border text-left transition flex items-center gap-2.5 ${
+                    customBgMode === '360'
+                      ? 'bg-purple-950/60 border-purple-400 text-white shadow-sm'
+                      : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  <Globe className="w-4 h-4 text-cyan-400 shrink-0" />
+                  <div>
+                    <div className="text-xs font-bold">🌍 Bầu Trời 3D 360° (Khuyên dùng)</div>
+                    <div className="text-[10px] text-slate-400">Bọc quanh trường đua, camera lia hướng nào cũng thấy ảnh</div>
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => handleBgModeChange('BACKDROP')}
+                  className={`p-2.5 rounded-xl border text-left transition flex items-center gap-2.5 ${
+                    customBgMode === 'BACKDROP'
+                      ? 'bg-purple-950/60 border-purple-400 text-white shadow-sm'
+                      : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  <Layers className="w-4 h-4 text-purple-400 shrink-0" />
+                  <div>
+                    <div className="text-xs font-bold">🖼️ Phông Nền Phẳng 2D (Backdrop)</div>
+                    <div className="text-[10px] text-slate-400">Ảnh tĩnh cố định làm phông nền sau màn hình canvas</div>
+                  </div>
+                </button>
+              </div>
+            </div>
+
+            {/* Main Content Scrollable */}
+            <div className="space-y-4 overflow-y-auto pr-1 custom-scrollbar flex-1">
+              {/* Option 1: Upload from computer */}
+              <div className="p-4 rounded-xl bg-slate-900/80 border border-dashed border-purple-500/40 hover:border-purple-400 transition text-center">
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  accept="image/png,image/jpeg,image/webp,image/gif,image/bmp"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
+                <div className="flex flex-col items-center gap-2">
+                  <div className="w-12 h-12 rounded-xl bg-purple-900/50 border border-purple-500/40 flex items-center justify-center text-purple-300">
+                    <Upload className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <div className="text-sm font-bold text-white">Tải ảnh bất kỳ từ máy tính của bạn</div>
+                    <div className="text-xs text-slate-400 mt-0.5">
+                      Hỗ trợ mọi định dạng: JPG, PNG, WebP, GIF, ảnh chụp, ảnh phong cảnh...
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="mt-2 px-5 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-black shadow-lg transition flex items-center gap-2"
+                  >
+                    <Upload className="w-4 h-4" />
+                    <span>CHỌN FILE ẢNH TỪ MÁY TÍNH</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Option 2: Enter URL */}
+              <div className="p-3.5 rounded-xl bg-slate-900/70 border border-slate-800">
+                <label className="text-xs font-bold text-slate-300 block mb-1.5 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Hoặc dán đường link ảnh từ Internet (URL):</span>
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={urlInput}
+                    onChange={(e) => setUrlInput(e.target.value)}
+                    placeholder="https://example.com/background.jpg"
+                    className="flex-1 bg-black/80 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 font-mono"
+                  />
+                  <button
+                    onClick={handleApplyUrl}
+                    className="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-purple-300 hover:text-white border border-purple-500/30 text-xs font-bold transition shrink-0"
+                  >
+                    Áp Dụng
+                  </button>
+                </div>
+              </div>
+
+              {/* Option 3: Presets */}
+              <div>
+                <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block mb-2 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Bộ Sưu Tập Phông Nền Tuyệt Đẹp Có Sẵn (Tải tức thì 1-Click):</span>
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  {PRESET_WALLPAPERS.map((preset) => (
+                    <button
+                      key={preset.id}
+                      onClick={() => handleSelectPreset(preset)}
+                      className={`p-3 rounded-xl border text-left transition flex flex-col justify-between group ${
+                        customBgName === preset.name
+                          ? 'bg-purple-950/80 border-purple-400 shadow-md shadow-purple-950/50'
+                          : 'bg-slate-900/90 border-slate-800 hover:border-purple-500/60 hover:bg-slate-800/90'
+                      }`}
+                    >
+                      <div className="text-xs font-bold text-white group-hover:text-purple-300 transition">
+                        {preset.name}
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-1 line-clamp-2">
+                        {preset.description}
+                      </div>
+                      <div className="mt-2 text-[9px] font-mono font-bold text-cyan-400 flex items-center justify-between">
+                        <span>{preset.category}</span>
+                        <span className="text-purple-300 group-hover:underline">Bấm để dùng →</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between">
+              <span className="text-[11px] text-slate-400">* Bấm phím B hoặc nút X để đóng bảng này</span>
+              <button
+                onClick={() => setShowBackgroundModal(false)}
+                className="px-5 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold rounded-xl shadow-lg transition text-xs"
+              >
+                XONG & TRỞ LẠI GAME (B)
               </button>
             </div>
           </div>

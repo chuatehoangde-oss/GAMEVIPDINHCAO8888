@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { createSeededPRNG, hashString32 } from '../utils/prng';
 
 /**
  * Generates 3D control points for 36 high-speed premier racing circuit layouts.
@@ -8,150 +9,146 @@ import * as THREE from 'three';
  * Guarantees absolute seamless closure between start and end points (zero gaps).
  */
 export function generatePointsForLayout(layout: string, seed: number = 42): THREE.Vector3[] {
-  let s = Math.abs(seed) || 42;
-  const rand = () => {
-    s = (s * 16807) % 2147483647;
-    return (s - 1) / 2147483646;
-  };
+  const rng = createSeededPRNG(seed, hashString32(layout || 'GRAND_PRIX_OVAL'));
 
   const points: THREE.Vector3[] = [];
   const scale = 1400;
   // Subtle organic seed variation without introducing sharp noise
-  const seedHarmonic = ((seed % 100) / 100 - 0.5) * 0.08;
+  const seedHarmonic = rng.float(-0.08, 0.08);
 
   switch (layout) {
-    // 1. Grand Prix Oval Siêu Tốc (Hình elip kinh điển tốc độ cao)
+    // 1. Grand Prix Oval Siêu Tốc (Hình elip ngân hàng siêu tốc với góc nghiêng cua banked 18m)
     case 'GRAND_PRIX_OVAL': {
       const numPts = 48;
       for (let i = 0; i < numPts; i++) {
         const t = (i / numPts) * Math.PI * 2;
-        const x = Math.cos(t) * scale * (1.85 + seedHarmonic);
-        const z = Math.sin(t) * scale * 1.10;
-        const y = Math.sin(t * 2) * 5.0 + 8.0;
+        const x = Math.cos(t) * scale * (2.1 + seedHarmonic);
+        const z = Math.sin(t) * scale * 0.95;
+        // Banked turns at ends (t = 0 và t = PI) nghiêng cao 18m, đoạn thẳng dốc 4m
+        const y = Math.pow(Math.cos(t), 2) * 16.0 + 4.0;
         points.push(new THREE.Vector3(x, y, z));
       }
       break;
     }
 
-    // 2. Monza Temple of Speed (Parabolica & Curva Grande uốn lượn mượt mà)
+    // 2. Monza Temple of Speed (Parabolica vút cao & Curva Grande dốc 28m)
     case 'MONZA_TEMPLE_OF_SPEED': {
       const numPts = 52;
       for (let i = 0; i < numPts; i++) {
         const t = (i / numPts) * Math.PI * 2;
-        // Dạng quả xoài/giày đua Monza uốn lượn mượt mà
-        const r = scale * (1.35 + 0.30 * Math.cos(t) + 0.15 * Math.sin(2 * t));
-        const x = Math.cos(t) * r * 1.6;
-        const z = Math.sin(t) * r * 0.95 + Math.cos(2 * t) * (scale * 0.18);
-        const y = Math.sin(t * 2) * 6.0 + 8.0;
+        const r = scale * (1.45 + 0.35 * Math.cos(t) + 0.20 * Math.sin(2 * t));
+        const x = Math.cos(t) * r * 1.75;
+        const z = Math.sin(t) * r * 0.90 + Math.cos(2 * t) * (scale * 0.25);
+        const y = Math.sin(t * 2) * 14.0 + Math.cos(t) * 12.0 + 18.0;
         points.push(new THREE.Vector3(x, y, z));
       }
       break;
     }
 
-    // 3. Cầu Vượt Số 8 Figure-8 (Giao cắt lập thể đa tầng uốn lượn)
+    // 3. Cầu Vượt Số 8 Figure-8 (Giao cắt lập thể đa tầng uốn lượn, tầng trên 48m, tầng dưới 6m)
     case 'FIGURE_EIGHT_BRIDGE': {
       const numPts = 56;
       for (let i = 0; i < numPts; i++) {
         const t = (i / numPts) * Math.PI * 2;
-        const x = Math.sin(t) * scale * 1.65;
-        const z = Math.sin(t * 2) * scale * 1.15;
-        const y = (Math.sin(t) * 0.5 + 0.5) * 18.0 + 6.0;
+        const x = Math.sin(t) * scale * 1.85;
+        const z = Math.sin(t * 2) * scale * 1.25;
+        // Cầu vượt trên cao cách xa đường chui dưới thấp 42 mét
+        const y = Math.cos(t) * 22.0 + 26.0;
         points.push(new THREE.Vector3(x, y, z));
       }
       break;
     }
 
-    // 4. Đèo Núi Khúc Cua Uốn Lượn Touge (Bán kính cua lớn, siêu mượt mà)
+    // 4. Đèo Núi Khúc Cua Uốn Lượn Touge (Leo dốc 65m ngoạn mục, uốn lượn qua vách núi)
     case 'MOUNTAIN_HAIRPIN_PASS': {
       const numPts = 52;
       for (let i = 0; i < numPts; i++) {
         const t = (i / numPts) * Math.PI * 2;
-        const r = scale * (1.25 + 0.32 * Math.sin(3 * t));
-        const x = Math.cos(t) * r * 1.2;
-        const z = Math.sin(t) * r * 1.35;
-        const y = Math.sin(t * 2) * 9.0 + Math.cos(t * 3) * 5.0 + 20.0;
+        const r = scale * (1.30 + 0.38 * Math.sin(3 * t));
+        const x = Math.cos(t) * r * 1.35;
+        const z = Math.sin(t) * r * 1.45;
+        const y = Math.sin(t) * 28.0 + Math.cos(t * 3) * 14.0 + 35.0;
         points.push(new THREE.Vector3(x, y, z));
       }
       break;
     }
 
-    // 5. Sân Bay Quân Sự Aerodrome (Đường bay lượn vòng cung mềm mại)
+    // 5. Sân Bay Quân Sự Aerodrome (Đường băng thẳng tắp 3.2km siêu dài)
     case 'AIRPORT_RUNWAY_DRAG': {
       const numPts = 50;
       for (let i = 0; i < numPts; i++) {
         const t = (i / numPts) * Math.PI * 2;
-        // Bầu dục kéo dài hai đầu bo tròn bán kính 600m siêu mượt, không vuông góc
-        const x = Math.cos(t) * scale * 2.4;
-        const z = Math.sin(t) * scale * 0.65;
-        const y = Math.sin(t * 2) * 4.0 + 7.0;
+        const x = Math.cos(t) * scale * 2.8;
+        const z = Math.sin(t) * scale * 0.55;
+        const y = Math.sin(t * 2) * 5.0 + 6.0;
         points.push(new THREE.Vector3(x, y, z));
       }
       break;
     }
 
-    // 6. Cao Tốc Vách Đá Ven Biển (Sóng biển uốn lượn mềm mại)
+    // 6. Cao Tốc Vách Đá Ven Biển (Sóng biển uốn lượn, dốc cao 45m nhìn ra đại dương)
     case 'COASTAL_CLIFF_HIGHWAY': {
       const numPts = 48;
       for (let i = 0; i < numPts; i++) {
         const t = (i / numPts) * Math.PI * 2;
-        const x = Math.cos(t) * scale * 1.55 + Math.sin(t * 3) * (scale * 0.18);
-        const z = Math.sin(t) * scale * 1.25 + Math.cos(t * 2) * (scale * 0.22);
-        const y = Math.sin(t * 2) * 8.0 + 15.0;
+        const x = Math.cos(t) * scale * 1.70 + Math.sin(t * 3) * (scale * 0.25);
+        const z = Math.sin(t) * scale * 1.35 + Math.cos(t * 2) * (scale * 0.28);
+        const y = Math.sin(t) * 20.0 + Math.cos(t * 2) * 10.0 + 25.0;
         points.push(new THREE.Vector3(x, y, z));
       }
       break;
     }
 
-    // 7. Vành Đai Tokyo Shuto Ring (Đường vành đai đô thị uốn lượn cong tròn)
+    // 7. Vành Đai Tokyo Shuto Ring (Đường cao tốc trên cao đa tầng 3 tầng vượt)
     case 'TOKYO_EXPRESSWAY_RING': {
       const numPts = 50;
       for (let i = 0; i < numPts; i++) {
         const t = (i / numPts) * Math.PI * 2;
-        const r = scale * (1.30 + 0.18 * Math.sin(t * 3));
-        const x = Math.cos(t) * r * 1.2;
-        const z = Math.sin(t) * r * 1.15;
-        const y = Math.sin(t * 3) * 7.0 + 9.0;
+        const r = scale * (1.35 + 0.25 * Math.sin(t * 3));
+        const x = Math.cos(t) * r * 1.3;
+        const z = Math.sin(t) * r * 1.25;
+        const y = Math.sin(t * 3) * 15.0 + Math.cos(t * 2) * 8.0 + 22.0;
         points.push(new THREE.Vector3(x, y, z));
       }
       break;
     }
 
-    // 8. Suzuka Kỹ Thuật Chữ S (Chuỗi cua S-Curves huyền thoại)
+    // 8. Suzuka Kỹ Thuật Chữ S (Chuỗi cua S-Curves huyền thoại uốn lượn nhấp nhô)
     case 'SUZUKA_TECHNICAL_S': {
       const numPts = 52;
       for (let i = 0; i < numPts; i++) {
         const t = (i / numPts) * Math.PI * 2;
-        const x = Math.sin(t) * scale * 1.50 + Math.sin(t * 3) * 220;
-        const z = Math.cos(t) * scale * 1.20 + Math.cos(t * 2) * 180;
-        const y = Math.sin(t * 2) * 8.0 + 8.0;
+        const x = Math.sin(t) * scale * 1.65 + Math.sin(t * 3) * 280;
+        const z = Math.cos(t) * scale * 1.30 + Math.cos(t * 2) * 220;
+        const y = Math.sin(t * 2) * 16.0 + 14.0;
         points.push(new THREE.Vector3(x, y, z));
       }
       break;
     }
 
-    // 9. Hẻm Núi Sa Mạc Cát Đỏ (Cồn cát sa mạc lượn sóng)
+    // 9. Hẻm Núi Sa Mạc Cát Đỏ (Hẻm sâu 38m, đáy hẻm lượn sóng)
     case 'DESERT_CANYON_DUNES': {
       const numPts = 48;
       for (let i = 0; i < numPts; i++) {
         const t = (i / numPts) * Math.PI * 2;
-        const r = scale * (1.32 + 0.24 * Math.sin(3 * t));
-        const x = Math.sin(t) * r;
-        const z = Math.cos(t) * r * 1.05;
-        const y = Math.sin(t * 2) * 8.0 + 14.0;
+        const r = scale * (1.40 + 0.30 * Math.sin(3 * t));
+        const x = Math.sin(t) * r * 1.15;
+        const z = Math.cos(t) * r * 1.10;
+        const y = Math.sin(t * 2) * 18.0 + Math.cos(t) * 10.0 + 18.0;
         points.push(new THREE.Vector3(x, y, z));
       }
       break;
     }
 
-    // 10. Nurburgring Tàu Lượn Siêu Tốc (Nhấp nhô uốn lượn mượt mà)
+    // 10. Nurburgring Tàu Lượn Siêu Tốc (Dốc tàu lượn 52m, cảm giác rơi tự do ngoạn mục)
     case 'NURBURGRING_ROLLER_COASTER': {
       const numPts = 54;
       for (let i = 0; i < numPts; i++) {
         const t = (i / numPts) * Math.PI * 2;
-        const r = scale * (1.28 + 0.25 * Math.sin(2 * t) + 0.15 * Math.cos(3 * t));
-        const x = Math.cos(t) * r;
-        const z = Math.sin(t) * r * 1.22;
-        const y = Math.sin(t * 3) * 8.0 + Math.cos(t * 2) * 6.0 + 20.0;
+        const r = scale * (1.35 + 0.32 * Math.sin(2 * t) + 0.20 * Math.cos(3 * t));
+        const x = Math.cos(t) * r * 1.1;
+        const z = Math.sin(t) * r * 1.30;
+        const y = Math.sin(t * 4) * 22.0 + Math.cos(t * 2) * 12.0 + 32.0;
         points.push(new THREE.Vector3(x, y, z));
       }
       break;
@@ -381,7 +378,8 @@ export function generatePointsForLayout(layout: string, seed: number = 42): THRE
         // Dạng Lemniscate of Gerono (hoàn toàn mượt mà)
         const x = Math.sin(t) * scale * 1.70;
         const z = Math.sin(t * 2) * scale * 0.95;
-        const y = (Math.sin(t) * 0.5 + 0.5) * 16.0 + 6.0;
+        // Cầu vượt trên cao cách xa đường chui dưới thấp 36 mét (t=0 -> y=44m, t=PI -> y=8m)
+        const y = Math.cos(t) * 18.0 + 26.0;
         points.push(new THREE.Vector3(x, y, z));
       }
       break;
@@ -509,6 +507,38 @@ export function generatePointsForLayout(layout: string, seed: number = 42): THRE
       }
       break;
     }
+  }
+
+  // Biến thiên hình học liên tục theo seed (tỉ lệ X/Z, xoay toàn bộ đường đua, dao động điều hòa C2-liên tục)
+  // Đảm bảo mọi seed trong không gian hàng chục triệu cuộc đua đều có hình dáng đường đua và góc cua khác biệt
+  const isOverpassBridge = layout === 'FIGURE_EIGHT_BRIDGE' || layout === 'INFINITY_LOOP_EXPRESS';
+  const scaleX = rng.float(0.84, 1.24);
+  const scaleZ = rng.float(0.84, 1.24);
+  const scaleY = rng.float(0.95, 1.38);
+  const rotY = rng.float(0, Math.PI * 2);
+  const cosR = Math.cos(rotY);
+  const sinR = Math.sin(rotY);
+  const amp2 = isOverpassBridge ? 0 : rng.float(-110, 110);
+  const amp3 = isOverpassBridge ? 0 : rng.float(-85, 85);
+  const phase2 = rng.float(0, Math.PI * 2);
+  const phase3 = rng.float(0, Math.PI * 2);
+  const yHarmAmp = isOverpassBridge ? rng.float(-2.5, 2.5) : rng.float(-5.5, 5.5);
+
+  const numPoints = points.length;
+  for (let i = 0; i < numPoints; i++) {
+    const pt = points[i];
+    const t = (i / Math.max(1, numPoints)) * Math.PI * 2;
+    const radLen = Math.hypot(pt.x, pt.z) || 1;
+    const ux = pt.x / radLen;
+    const uz = pt.z / radLen;
+    const radialOffset = amp2 * Math.cos(2 * t + phase2) + amp3 * Math.sin(3 * t + phase3);
+
+    const sx = (pt.x + ux * radialOffset) * scaleX;
+    const sz = (pt.z + uz * radialOffset) * scaleZ;
+    pt.x = sx * cosR - sz * sinR;
+    pt.z = sx * sinR + sz * cosR;
+    // Dùng sin(2t) trên cầu vượt để luôn giữ nguyên khoảng hở tối đa tại giao lộ t=0 & t=PI
+    pt.y = pt.y * scaleY + yHarmAmp * Math.sin(2 * t);
   }
 
   // Tự động chuẩn hóa cao độ toàn bộ 36 kiểu đường đua:
